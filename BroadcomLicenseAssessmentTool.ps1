@@ -1,13 +1,17 @@
-# Broadcom License Assessment Tool
+# VMware Broadcom License Assessment Tool
 # Author: Juliano Cunha (https://github.com/julianscunha)
 # Repository: https://github.com/julianscunha
-# File: BroadcomLicenseAssessmentTool.ps1
-# Description: Automated assessment for VCF/VVF/vSAN licensing based on Broadcom public guidance
+# Description: Automated assessment for VCF/VVF/vSAN licensing with dashboard-style executive reporting based on Broadcom public guidance
 # License: MIT
+
+# Broadcom License Assessment Tool
+# Author: Juliano Cunha (https://github.com/julianscunha)
+# Version: 1.0.0
+# Description: Automated assessment for VMware licensing under the Broadcom model.
 
 [CmdletBinding()]
 param(
-    [string]$OutputFolder = (Join-Path -Path (Get-Location) -ChildPath ("Broadcom-License-Assessment-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))),
+    [string]$OutputFolder = (Join-Path -Path (Get-Location) -ChildPath ("BroadcomLicenseAssessment-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))),
     [string]$ConfigFile,
     [switch]$ExportPdf,
     [switch]$CollectLicenseAssignments,
@@ -27,8 +31,6 @@ $script:Infos = New-Object System.Collections.Generic.List[string]
 $script:RuntimeChanges = New-Object System.Collections.Generic.List[object]
 $script:OriginalExecutionPolicyProcess = $null
 $script:OriginalInvalidCertificateAction = $null
-$script:OriginalPSGalleryInstallationPolicy = $null
-$script:OriginalSecurityProtocol = $null
 
 function Write-Log {
     param(
@@ -139,10 +141,10 @@ function Invoke-ExecutionPolicyRemediation {
         return [pscustomobject]@{ Changed = $false; Approved = $true; Scope = 'None'; PreviousValue = $PowerShellFacts.ExecutionPolicyProcess }
     }
 
-    Write-Log -Level WARN -Message 'A política de execução atual pode impedir a importação/execução de módulos e scripts auxiliares.'
-    Write-Host 'Para esta execução, o script pode aplicar temporariamente: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass' -ForegroundColor Yellow
-    Write-Host 'Impacto: somente nesta janela/sessão do PowerShell; não altera GPO, vCenter, ESXi ou configurações permanentes do sistema.' -ForegroundColor Yellow
-    $answer = (Read-Host 'Deseja aplicar essa alteração temporária agora? (S/N)').ToUpperInvariant()
+    Write-Log -Level WARN -Message 'A politica de execucao atual pode impedir a importacao/execucao de modulos e scripts auxiliares.'
+    Write-Host 'Para esta execucao, o script pode aplicar temporariamente: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass' -ForegroundColor Yellow
+    Write-Host 'Impacto: somente nesta janela/sessao do PowerShell; nao altera GPO, vCenter, ESXi ou configuracões permanentes do sistema.' -ForegroundColor Yellow
+    $answer = (Read-Host 'Deseja aplicar essa alteracao temporaria agora? (S/N)').ToUpperInvariant()
     if ($answer -notin @('S','SIM','Y','YES')) {
         return [pscustomobject]@{ Changed = $false; Approved = $false; Scope = 'Process'; PreviousValue = $PowerShellFacts.ExecutionPolicyProcess }
     }
@@ -178,167 +180,6 @@ function Get-CurrentInvalidCertificateAction {
         if ($cfg -and $cfg.PSObject.Properties.Name -contains 'InvalidCertificateAction') { return [string]$cfg.InvalidCertificateAction }
     } catch { }
     return $null
-}
-
-
-function Test-IsPowerCLIRemediationNeeded {
-    param([Parameter(Mandatory)]$PowerCLIFacts,[Parameter(Mandatory)][string]$MinimumVersion)
-    if (-not $PowerCLIFacts.PowerCLIInstalled) { return $true }
-    if (-not $PowerCLIFacts.VimAutomationCoreInstalled) { return $true }
-    return ((Get-SafeVersion $PowerCLIFacts.PowerCLIVersion) -lt (Get-SafeVersion $MinimumVersion))
-}
-
-function Set-TemporarySecurityProtocol {
-    try {
-        $script:OriginalSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $script:RuntimeChanges.Add([pscustomobject]@{ Change='SecurityProtocol'; Scope='Session'; PreviousValue=[string]$script:OriginalSecurityProtocol; NewValue='Tls12'; Reverted=$false }) | Out-Null
-        Write-Log -Level OK -Message 'Temporarily set TLS protocol to Tls12 for module bootstrap.'
-    } catch {
-        Add-WarningItem "Unable to set temporary TLS 1.2: $($_.Exception.Message)"
-    }
-}
-
-function Restore-TemporarySecurityProtocol {
-    $change = $script:RuntimeChanges | Where-Object { $_.Change -eq 'SecurityProtocol' } | Select-Object -First 1
-    if (-not $change) { return }
-    try {
-        if ($null -ne $script:OriginalSecurityProtocol) {
-            [Net.ServicePointManager]::SecurityProtocol = $script:OriginalSecurityProtocol
-        }
-        $change.Reverted = $true
-        Write-Log -Level OK -Message 'Restored session TLS protocol setting.'
-    } catch {
-        Add-WarningItem "Unable to restore session TLS protocol setting: $($_.Exception.Message)"
-    }
-}
-
-function Set-TemporaryPSGalleryTrust {
-    try {
-        $repo = Get-PSRepository -Name 'PSGallery' -ErrorAction Stop
-        $script:OriginalPSGalleryInstallationPolicy = $repo.InstallationPolicy
-        if ($repo.InstallationPolicy -ne 'Trusted') {
-            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction Stop
-            $script:RuntimeChanges.Add([pscustomobject]@{ Change='PSGalleryInstallationPolicy'; Scope='CurrentUser'; PreviousValue=$script:OriginalPSGalleryInstallationPolicy; NewValue='Trusted'; Reverted=$false }) | Out-Null
-            Write-Log -Level OK -Message 'Temporarily set PSGallery InstallationPolicy to Trusted.'
-        }
-    } catch {
-        Add-WarningItem "Unable to set PSGallery as Trusted temporarily: $($_.Exception.Message)"
-    }
-}
-
-function Restore-TemporaryPSGalleryTrust {
-    $change = $script:RuntimeChanges | Where-Object { $_.Change -eq 'PSGalleryInstallationPolicy' } | Select-Object -First 1
-    if (-not $change) { return }
-    try {
-        $target = if ([string]::IsNullOrWhiteSpace([string]$script:OriginalPSGalleryInstallationPolicy)) { 'Untrusted' } else { [string]$script:OriginalPSGalleryInstallationPolicy }
-        Set-PSRepository -Name 'PSGallery' -InstallationPolicy $target -ErrorAction Stop
-        $change.Reverted = $true
-        Write-Log -Level OK -Message "Restored PSGallery InstallationPolicy to '$target'."
-    } catch {
-        Add-WarningItem "Unable to restore PSGallery InstallationPolicy: $($_.Exception.Message)"
-    }
-}
-
-function Get-InstallPromptDecision {
-    param([string]$Question)
-    $answer = (Read-Host $Question).Trim().ToUpperInvariant()
-    return ($answer -in @('S','SIM','Y','YES'))
-}
-
-function Invoke-PowerCLIRemediation {
-    param([Parameter(Mandatory)][string]$MinimumVersion)
-
-    $cliFacts = Get-PowerCLIFacts
-    if (-not (Test-IsPowerCLIRemediationNeeded -PowerCLIFacts $cliFacts -MinimumVersion $MinimumVersion)) {
-        return [pscustomobject]@{ Changed=$false; Succeeded=$true; RelaunchSuggested=$false }
-    }
-
-    Write-Log -Level WARN -Message ("VMware PowerCLI $MinimumVersion or later is required by Broadcom guidance for the calculator workflow.")
-    Write-Host 'This script can bootstrap the local prerequisites in the same PowerShell session.' -ForegroundColor Yellow
-    Write-Host 'Planned actions:' -ForegroundColor Yellow
-    Write-Host ' - Ensure TLS 1.2 for package download' -ForegroundColor Yellow
-    Write-Host ' - Ensure NuGet package provider is present' -ForegroundColor Yellow
-    Write-Host ' - Temporarily trust PSGallery during installation' -ForegroundColor Yellow
-    Write-Host ' - Install or update VMware.PowerCLI in CurrentUser scope' -ForegroundColor Yellow
-    Write-Host 'Persistent change: VMware.PowerCLI module installation in your user profile. Temporary changes are restored at the end.' -ForegroundColor Yellow
-
-    if (-not (Get-InstallPromptDecision -Question 'Do you want the script to install/update PowerCLI now? (Y/N)')) {
-        return [pscustomobject]@{ Changed=$false; Succeeded=$false; RelaunchSuggested=$false }
-    }
-
-    $changed = $false
-    try {
-        Set-TemporarySecurityProtocol
-        try {
-            $null = Get-PackageProvider -Name NuGet -ErrorAction Stop
-            Write-Log -Level OK -Message 'NuGet package provider already available.'
-        } catch {
-            Write-Log -Level INFO -Message 'Installing NuGet package provider.'
-            Install-PackageProvider -Name NuGet -MinimumVersion '2.8.5.201' -Force -Scope CurrentUser -ErrorAction Stop | Out-Null
-            $changed = $true
-            Write-Log -Level OK -Message 'NuGet package provider installed.'
-        }
-
-        Set-TemporaryPSGalleryTrust
-
-        $current = Get-PowerCLIFacts
-        if (-not $current.PowerCLIInstalled) {
-            Write-Log -Level INFO -Message 'Installing VMware.PowerCLI for CurrentUser.'
-        } elseif ((Get-SafeVersion $current.PowerCLIVersion) -lt (Get-SafeVersion $MinimumVersion)) {
-            Write-Log -Level INFO -Message ("Updating VMware.PowerCLI from version $($current.PowerCLIVersion) to meet minimum $MinimumVersion.")
-        } else {
-            Write-Log -Level INFO -Message 'Refreshing VMware.PowerCLI installation to ensure required modules are available.'
-        }
-
-        Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
-        $changed = $true
-
-        Import-Module VMware.VimAutomation.Core -ErrorAction Stop
-        try { Import-Module VMware.PowerCLI -ErrorAction Stop } catch { }
-        try { Import-Module VMware.VimAutomation.Storage -ErrorAction SilentlyContinue } catch { }
-
-        $updated = Get-PowerCLIFacts
-        $ok = -not (Test-IsPowerCLIRemediationNeeded -PowerCLIFacts $updated -MinimumVersion $MinimumVersion)
-        if ($ok) {
-            Write-Log -Level OK -Message ("PowerCLI prerequisites satisfied. Installed version: $($updated.PowerCLIVersion)")
-            return [pscustomobject]@{ Changed=$changed; Succeeded=$true; RelaunchSuggested=$false }
-        }
-
-        Add-WarningItem 'PowerCLI installation finished, but module validation still did not meet the minimum requirements in the current session.'
-        return [pscustomobject]@{ Changed=$changed; Succeeded=$false; RelaunchSuggested=$true }
-    } catch {
-        Add-WarningItem "PowerCLI remediation failed: $($_.Exception.Message)"
-        return [pscustomobject]@{ Changed=$changed; Succeeded=$false; RelaunchSuggested=$false; ErrorMessage=$_.Exception.Message }
-    }
-}
-
-function Start-SelfRelaunch {
-    param([switch]$BypassExecutionPolicy)
-
-    if (-not $PSCommandPath) { return $false }
-    try {
-        $argList = @('-NoProfile')
-        if ($BypassExecutionPolicy) { $argList += @('-ExecutionPolicy','Bypass') }
-        $argList += @('-File', ('"{0}"' -f $PSCommandPath))
-
-        if ($OutputFolder) { $argList += @('-OutputFolder', ('"{0}"' -f [string]$OutputFolder)) }
-        if ($ConfigFile) { $argList += @('-ConfigFile', ('"{0}"' -f [string]$ConfigFile)) }
-        if ($ExportPdf) { $argList += '-ExportPdf' }
-        if ($CollectLicenseAssignments) { $argList += '-CollectLicenseAssignments' }
-        if ($TrustInvalidCertificates) { $argList += '-TrustInvalidCertificates' }
-        if ($DisconnectWhenDone) { $argList += '-DisconnectWhenDone' }
-        if ($SkipPrereqInstallHints) { $argList += '-SkipPrereqInstallHints' }
-        if ($UseTranscript) { $argList += '-UseTranscript' }
-
-        $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
-        Start-Process -FilePath $exe -ArgumentList $argList | Out-Null
-        Write-Log -Level OK -Message 'A new PowerShell session was launched to continue the assessment.'
-        return $true
-    } catch {
-        Add-WarningItem "Unable to relaunch script automatically: $($_.Exception.Message)"
-        return $false
-    }
 }
 
 function Test-Prerequisites {
@@ -393,9 +234,9 @@ function Set-CertificateHandling {
             $script:OriginalInvalidCertificateAction = Get-CurrentInvalidCertificateAction
             Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
             $script:RuntimeChanges.Add([pscustomobject]@{ Change = 'InvalidCertificateAction'; Scope = 'Session'; PreviousValue = $script:OriginalInvalidCertificateAction; NewValue = 'Ignore'; Reverted = $false }) | Out-Null
-            Write-Log -Level OK -Message 'Configured PowerCLI InvalidCertificateAction=Ignore somente na sessão atual.'
+            Write-Log -Level OK -Message 'Configured PowerCLI InvalidCertificateAction=Ignore somente na sessao atual.'
         } catch {
-            Add-WarningItem "Falha ao configurar InvalidCertificateAction=Ignore somente na sessão atual: $($_.Exception.Message)"
+            Add-WarningItem "Falha ao configurar InvalidCertificateAction=Ignore somente na sessao atual: $($_.Exception.Message)"
         }
     }
 }
@@ -409,9 +250,9 @@ function Restore-CertificateHandling {
             Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction $target -Confirm:$false | Out-Null
         }
         $change.Reverted = $true
-        Write-Log -Level OK -Message "InvalidCertificateAction da sessão restaurada para '$target'."
+        Write-Log -Level OK -Message "InvalidCertificateAction da sessao restaurada para '$target'."
     } catch {
-        Add-WarningItem "Falha ao restaurar InvalidCertificateAction da sessão: $($_.Exception.Message)"
+        Add-WarningItem "Falha ao restaurar InvalidCertificateAction da sessao: $($_.Exception.Message)"
     }
 }
 
@@ -629,7 +470,7 @@ function Get-EnvironmentInput {
 
     Write-Host ''
     Write-Host ("=== Ambiente #{0} ===" -f $Index) -ForegroundColor White
-    $name = Read-Host 'Nome amigável do ambiente/cliente'
+    $name = Read-Host 'Nome amigavel do ambiente/cliente'
     if ([string]::IsNullOrWhiteSpace($name)) { $name = "Ambiente-$Index" }
 
     $server = Read-Host 'FQDN/IP do vCenter'
@@ -638,7 +479,7 @@ function Get-EnvironmentInput {
         $deployment = (Read-Host 'Informe VCF ou VVF').ToUpperInvariant()
     }
 
-    $clusterFilter = Read-Host 'Nome de cluster específico (Enter = todos)'
+    $clusterFilter = Read-Host 'Nome de cluster especifico (Enter = todos)'
 
     [pscustomobject]@{
         Name = $name
@@ -662,7 +503,7 @@ function Get-EnvironmentPlan {
     do {
         $plans.Add((Get-EnvironmentInput -Index $index)) | Out-Null
         $index++
-        $more = (Read-Host 'Há outro ambiente para avaliar? (S/N)').ToUpperInvariant()
+        $more = (Read-Host 'Ha outro ambiente para avaliar? (S/N)').ToUpperInvariant()
     } while ($more -in @('S','SIM','Y','YES'))
     return $plans
 }
@@ -673,7 +514,7 @@ function Connect-Environment {
     Write-Log -Message "Conectando em $($Plan.Server) para o ambiente '$($Plan.Name)'..."
     try {
         $server = Connect-VIServer -Server $Plan.Server -ErrorAction Stop
-        Write-Log -Level OK -Message "Conectado em $($server.Name) (versão $($server.Version))."
+        Write-Log -Level OK -Message "Conectado em $($server.Name) (versao $($server.Version))."
         return $server
     } catch {
         throw "Falha ao conectar em $($Plan.Server): $($_.Exception.Message)"
@@ -713,7 +554,7 @@ function Get-VsanRawCapacityTiB {
             $groups = Get-VsanDiskGroup -Server $Server -VMHost $HostName
             return @($groups | ForEach-Object { $_.ExtensionData.ssd.canonicalName })
         } catch {
-            Add-WarningItem "Não foi possível obter cache disks do host $HostName no cluster $($Cluster.Name): $($_.Exception.Message)"
+            Add-WarningItem "Nao foi possivel obter cache disks do host $HostName no cluster $($Cluster.Name): $($_.Exception.Message)"
             return @()
         }
     }
@@ -741,7 +582,7 @@ function Get-VsanRawCapacityTiB {
                 Success = $false
                 RawTiB = -1
                 Mode = 'HEALTH-CHECK'
-                Warning = "Host $($vmhost.Name) não está conectado."
+                Warning = "Host $($vmhost.Name) nao esta conectado."
             }
         }
     }
@@ -946,6 +787,7 @@ function Get-EnvironmentAssessment {
 #endregion inventory and licensing
 
 #region reporting
+
 function New-HtmlReport {
     param(
         [Parameter(Mandatory)]$AssessmentBundle,
@@ -954,262 +796,283 @@ function New-HtmlReport {
         [Parameter(Mandatory)]$Reference
     )
 
+    function Format-Number {
+        param($Value)
+        if ($null -eq $Value) { return '0' }
+        if ($Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) {
+            return ('{0:N2}' -f [double]$Value)
+        }
+        return ('{0:N0}' -f [double]$Value)
+    }
+
+    function New-ProgressBlock {
+        param(
+            [string]$Title,
+            [double]$Value,
+            [double]$Max,
+            [string]$Suffix,
+            [string]$Tone = 'blue',
+            [string]$Hint = ''
+        )
+        if ($Max -le 0) { $Max = 1 }
+        $pct = [math]::Round(([math]::Min($Value, $Max) / $Max) * 100, 0)
+        return @"
+<div class='metric-card'>
+  <div class='metric-top'>
+    <div class='metric-title'>$Title</div>
+    <div class='metric-value'>$(Format-Number $Value) $Suffix</div>
+  </div>
+  <div class='bar-track'><div class='bar-fill tone-$Tone' style='width: $pct%;'></div></div>
+  <div class='metric-hint'>$Hint</div>
+</div>
+"@
+    }
+
+    function New-StatCard {
+        param([string]$Label,[string]$Value,[string]$Sub='')
+        return @"
+<div class='stat-card'>
+  <div class='stat-label'>$Label</div>
+  <div class='stat-value'>$Value</div>
+  <div class='stat-sub'>$Sub</div>
+</div>
+"@
+    }
+
     $allClusterRows = @($AssessmentBundle.Environments | ForEach-Object { $_.Clusters })
     $allHostRows = @($AssessmentBundle.Environments | ForEach-Object { $_.Hosts })
-    $allLicenseRows = @($AssessmentBundle.Environments | ForEach-Object { $_.LicenseAssignments })
-    $allLicenseInventoryRows = @($AssessmentBundle.Environments | ForEach-Object { $_.LicenseInventory })
-    $allComparisonRows = @($AssessmentBundle.Environments | ForEach-Object { $_.Comparison })
     $global = @($AssessmentBundle.GlobalSummary)[0]
+    $maxCompute = [double]([math]::Max(1, (@($allClusterRows | Measure-Object -Property ComputeCoresRequired -Maximum).Maximum)))
+    $maxRaw = [double]([math]::Max(1, (@($allClusterRows | Measure-Object -Property vSanRawTiBRequired -Maximum).Maximum)))
+    $maxAddOn = [double]([math]::Max(1, (@($allClusterRows | Measure-Object -Property vSanAddOnTiBRequired -Maximum).Maximum)))
 
     $style = @"
 <style>
-:root{
-  --brand:#0b3d91;
-  --brand-dark:#082a63;
-  --brand-soft:#eef4ff;
-  --accent:#1f6feb;
-  --text:#1b2430;
-  --muted:#667085;
-  --border:#d7dfeb;
-  --ok:#027a48;
-  --warn:#b54708;
-  --fail:#b42318;
-  --page:#f5f7fb;
-  --white:#ffffff;
-}
-@page { size: A4; margin: 18mm 12mm 18mm 12mm; }
-* { box-sizing:border-box; }
-body {
-  font-family: Segoe UI, Arial, sans-serif;
-  color: var(--text);
-  margin: 0;
-  background: var(--page);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.container { max-width: 1180px; margin: 0 auto; padding: 24px; }
-.cover {
-  background: linear-gradient(135deg, var(--brand-dark), var(--brand));
-  color: #fff;
-  border-radius: 18px;
-  padding: 28px 30px;
-  box-shadow: 0 12px 30px rgba(8,42,99,.18);
-  margin-bottom: 18px;
-}
-.cover-top { font-size: 12px; letter-spacing: .4px; opacity: .95; text-transform: uppercase; }
-.cover h1 { margin: 8px 0 10px 0; font-size: 30px; line-height: 1.15; }
-.cover p { margin: 6px 0; font-size: 13px; }
-.meta-strip {
-  display:flex; gap:18px; flex-wrap:wrap; margin-top: 16px; padding-top: 14px;
-  border-top: 1px solid rgba(255,255,255,.18);
-}
-.meta-item strong { display:block; font-size:11px; opacity:.82; text-transform:uppercase; }
-.meta-item span { font-size:14px; }
-.section {
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 20px 22px;
-  margin-bottom: 18px;
-  box-shadow: 0 4px 18px rgba(15,23,42,.04);
-}
-.section h2 {
-  margin: 0 0 12px 0;
-  color: var(--brand);
-  font-size: 20px;
-}
-.section h3 {
-  margin: 18px 0 10px 0;
-  color: var(--brand-dark);
-  font-size: 15px;
-}
-.lead {
-  color: var(--muted);
-  margin-top: 0;
-  margin-bottom: 14px;
-}
-.kpi-grid {
-  display:grid;
-  grid-template-columns: repeat(4, minmax(0,1fr));
-  gap: 12px;
-  margin: 14px 0 8px 0;
-}
-.kpi {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px;
-  background: linear-gradient(180deg, #ffffff, #f9fbff);
-}
-.kpi .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
-.kpi .value { color: var(--brand-dark); font-size: 24px; font-weight: 700; margin-top: 4px; }
-.kpi .sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
-.callout {
-  background: var(--brand-soft);
-  border-left: 5px solid var(--accent);
-  border-radius: 10px;
-  padding: 12px 14px;
-  margin-top: 12px;
-}
-.summary-list { margin: 10px 0 0 0; padding-left: 18px; }
-.summary-list li { margin: 4px 0; }
-.env-header {
-  display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;
-  margin-bottom: 8px;
-}
-.badge {
-  display:inline-block;
-  background: var(--brand-soft);
-  color: var(--brand-dark);
-  border: 1px solid #c9d8fb;
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  margin-right: 6px;
-}
-table { border-collapse: collapse; width: 100%; margin: 0 0 14px 0; font-size: 11px; }
-th, td { border: 1px solid var(--border); padding: 7px 8px; vertical-align: top; }
-th {
-  background: #eef4ff;
-  color: var(--brand-dark);
-  text-align: left;
-  font-weight: 700;
-}
-tr:nth-child(even) td { background: #fbfcfe; }
-.ok { color: var(--ok); font-weight: bold; }
-.warn { color: var(--warn); font-weight: bold; }
-.fail { color: var(--fail); font-weight: bold; }
-.small { font-size: 11px; color: var(--muted); }
-.footer {
-  margin-top: 18px;
-  color: var(--muted);
-  font-size: 11px;
-  text-align: center;
-}
-hr.soft { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
-ul.clean { margin: 8px 0 0 0; padding-left: 18px; }
-@media print {
-  body { background: #fff; }
-  .container { max-width:none; padding: 0; }
-  .section, .cover { box-shadow:none; }
-}
+:root{--bg:#07111f;--panel:#ffffff;--ink:#0f172a;--muted:#64748b;--line:#d9e2ec;--blue:#2563eb;--blue2:#60a5fa;--indigo:#3730a3;--green:#16a34a;--amber:#d97706;--red:#dc2626;--slate:#1e293b;--paper:#f4f7fb;--soft:#eef5ff;}
+@page { size:A4; margin:12mm; }
+*{box-sizing:border-box;}
+body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,#eaf1fb 0,#f7f9fc 220px,#f7f9fc 100%);color:var(--ink);font-size:12px;line-height:1.45;}
+.container{max-width:1200px;margin:0 auto;padding:24px;}
+.hero{background:radial-gradient(circle at top right,#1d4ed8 0,#0b1f48 48%,#081226 100%);color:#fff;border-radius:24px;padding:28px 30px;box-shadow:0 18px 48px rgba(8,18,38,.18);position:relative;overflow:hidden;}
+.hero:after{content:'';position:absolute;right:-80px;top:-80px;width:240px;height:240px;border-radius:999px;background:rgba(255,255,255,.08);}
+.hero .eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.8px;opacity:.9;}
+.hero h1{margin:10px 0 8px 0;font-size:30px;line-height:1.1;max-width:780px;}
+.hero p{margin:6px 0;max-width:840px;color:rgba(255,255,255,.9);}
+.meta-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px;}
+.meta-box{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px 14px;backdrop-filter: blur(6px);}
+.meta-box .k{font-size:10px;text-transform:uppercase;opacity:.82;}
+.meta-box .v{font-size:18px;font-weight:700;margin-top:4px;}
+.section{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;margin-top:18px;box-shadow:0 8px 28px rgba(15,23,42,.05);}
+.section h2{margin:0 0 10px 0;font-size:20px;color:var(--slate);}
+.section h3{margin:18px 0 10px 0;font-size:15px;color:var(--indigo);}
+.lead{color:var(--muted);margin-top:0;margin-bottom:14px;}
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.stat-card{border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(180deg,#fff,#f8fbff);}
+.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+.stat-value{font-size:26px;font-weight:800;color:var(--slate);margin-top:4px;}
+.stat-sub{font-size:11px;color:var(--muted);margin-top:6px;}
+.metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+.metric-card{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff;}
+.metric-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-end;}
+.metric-title{font-weight:700;color:var(--slate);}
+.metric-value{font-weight:800;color:var(--blue);}
+.bar-track{height:12px;border-radius:999px;background:#edf2f7;overflow:hidden;margin-top:10px;border:1px solid #e2e8f0;}
+.bar-fill{height:100%;border-radius:999px;}
+.tone-blue{background:linear-gradient(90deg,#2563eb,#60a5fa);}
+.tone-green{background:linear-gradient(90deg,#16a34a,#4ade80);}
+.tone-amber{background:linear-gradient(90deg,#d97706,#fbbf24);}
+.tone-red{background:linear-gradient(90deg,#dc2626,#fb7185);}
+.metric-hint{font-size:11px;color:var(--muted);margin-top:8px;}
+.callout{background:linear-gradient(180deg,#eff6ff,#f8fbff);border:1px solid #cfe0ff;border-left:6px solid var(--blue);border-radius:14px;padding:14px 16px;}
+.badge-row{display:flex;gap:8px;flex-wrap:wrap;}
+.badge{display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;border:1px solid #dbeafe;background:#eff6ff;color:#1e3a8a;font-size:11px;font-weight:700;}
+.dual{display:grid;grid-template-columns:1.25fr .75fr;gap:14px;}
+.calc-box{background:#fbfdff;border:1px dashed #cbd5e1;border-radius:14px;padding:14px;}
+.formula{font-family:Consolas,Menlo,monospace;background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:10px;display:block;margin:8px 0;font-size:11px;white-space:pre-wrap;}
+table{width:100%;border-collapse:collapse;font-size:11px;margin:0 0 14px 0;}
+th,td{border:1px solid var(--line);padding:7px 8px;vertical-align:top;}
+th{background:#eff6ff;color:#1e293b;text-align:left;}
+tr:nth-child(even) td{background:#fbfcfe;}
+.small{font-size:11px;color:var(--muted);}
+.list-clean{margin:8px 0 0 0;padding-left:18px;}
+.list-clean li{margin:4px 0;}
+.footer{text-align:center;color:var(--muted);font-size:11px;margin:20px 0 8px 0;}
+.status-ok{color:var(--green);font-weight:700;}
+.status-warn{color:var(--amber);font-weight:700;}
+.status-fail{color:var(--red);font-weight:700;}
+@media print{body{background:#fff;}.container{padding:0;max-width:none;}.section,.hero{box-shadow:none;}}
 </style>
 "@
 
     $generatedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $html = @()
-    $html += '<html><head><meta charset="utf-8" />'
-    $html += $style
-    $html += '</head><body><div class="container">'
-    $html += '<div class="cover">'
-    $html += '<div class="cover-top">Generated by Juliano Cunha (GitHub: julianscunha)</div>'
-    $html += '<h1>Assessment Executivo de Licenciamento Broadcom / VMware</h1>'
-    $html += '<p>Relatório consolidado para apoio à análise técnica, validação comercial e preparação de proposta.</p>'
-    $html += '<p><strong>Developed by Juliano Cunha (GitHub: julianscunha)</strong></p>'
-    $html += '<div class="meta-strip">'
-    $html += ("<div class='meta-item'><strong>Data de geração</strong><span>{0}</span></div>" -f $generatedAt)
-    $html += ("<div class='meta-item'><strong>Ambientes avaliados</strong><span>{0}</span></div>" -f $global.TotalEnvironments)
-    $html += ("<div class='meta-item'><strong>Compute total</strong><span>{0} cores</span></div>" -f $global.TotalComputeCoresRequired)
-    $html += ("<div class='meta-item'><strong>vSAN Add-on total</strong><span>{0} TiB</span></div>" -f $global.TotalvSanAddOnTiBRequired)
-    $html += '</div></div>'
+    $html = New-Object System.Collections.Generic.List[string]
+    $html.Add('<html><head><meta charset="utf-8" />')
+    $html.Add($style)
+    $html.Add('</head><body><div class="container">')
+    $html.Add('<div class="hero">')
+    $html.Add('<div class="eyebrow'>Generated by Juliano Cunha (GitHub: julianscunha)</div>')
+    $html.Add('<h1>Broadcom / VMware Licensing Executive Assessment</h1>')
+    $html.Add('<p>Executive dashboard generated from collected vCenter inventory, licensing assignments, and Broadcom-aligned calculation rules.</p>')
+    $html.Add('<p><strong>Developed by Juliano Cunha (GitHub: julianscunha)</strong></p>')
+    $html.Add('<div class="meta-row">')
+    $html.Add("<div class='meta-box'><div class='k'>Generated at</div><div class='v'>$generatedAt</div></div>")
+    $html.Add("<div class='meta-box'><div class='k'>Environments</div><div class='v'>$($global.TotalEnvironments)</div></div>")
+    $html.Add("<div class='meta-box'><div class='k'>Compute Required</div><div class='v'>$($global.TotalComputeCoresRequired) cores</div></div>")
+    $html.Add("<div class='meta-box'><div class='k'>vSAN Add-on</div><div class='v'>$($global.TotalvSanAddOnTiBRequired) TiB</div></div>")
+    $html.Add('</div></div>')
 
-    $html += '<div class="section">'
-    $html += '<h2>Resumo executivo</h2>'
-    $html += '<p class="lead">Este relatório apresenta o consolidado do assessment, o entendimento de licenciamento recomendado e os principais pontos de atenção do ambiente atual.</p>'
-    $html += '<div class="kpi-grid">'
-    $html += ("<div class='kpi'><div class='label'>Ambientes avaliados</div><div class='value'>{0}</div><div class='sub'>Consolidação total</div></div>" -f $global.TotalEnvironments)
-    $html += ("<div class='kpi'><div class='label'>VVF / VCF Compute</div><div class='value'>{0}</div><div class='sub'>Cores requeridos</div></div>" -f $global.TotalComputeCoresRequired)
-    $html += ("<div class='kpi'><div class='label'>vSAN raw apurado</div><div class='value'>{0}</div><div class='sub'>TiB totais</div></div>" -f $global.TotalvSanRawTiBRequired)
-    $html += ("<div class='kpi'><div class='label'>vSAN Add-on</div><div class='value'>{0}</div><div class='sub'>TiB adicionais</div></div>" -f $global.TotalvSanAddOnTiBRequired)
-    $html += '</div>'
-    $html += '<div class="callout">'
-    $html += '<strong>Leitura recomendada para proposta:</strong>'
-    $html += '<ul class="summary-list">'
-    $html += ("<li>Total consolidado de compute requerido: <strong>{0} cores</strong>.</li>" -f $global.TotalComputeCoresRequired)
-    $html += ("<li>Total consolidado de entitlement vSAN: <strong>{0} TiB</strong>.</li>" -f $global.TotalvSanEntitledTiB)
-    $html += ("<li>Total consolidado de capacidade vSAN raw apurada: <strong>{0} TiB</strong>.</li>" -f $global.TotalvSanRawTiBRequired)
-    $html += ("<li>Total consolidado de vSAN Add-on sugerido: <strong>{0} TiB</strong>.</li>" -f $global.TotalvSanAddOnTiBRequired)
-    $html += ("<li>Objetos sem licença identificados: <strong>{0}</strong>.</li>" -f $global.TotalObjectsWithoutLicense)
-    $html += '</ul></div>'
-    $html += '<p class="small">Observação: o dimensionamento final para proposta deve ser confirmado pela equipe técnico-comercial com base nas políticas vigentes da Broadcom e nas evidências coletadas neste assessment.</p>'
-    $html += '</div>'
+    $html.Add('<div class="section">')
+    $html.Add('<h2>Executive summary</h2>')
+    $html.Add('<p class="lead">High-level dashboard summarizing the recommended licensing position, current observed licensing status, and total vSAN raw capacity considered in the assessment.</p>')
+    $html.Add('<div class="stats-grid">')
+    $html.Add((New-StatCard -Label 'Compute cores required' -Value "$($global.TotalComputeCoresRequired)" -Sub 'Total licensed cores required across all environments'))
+    $html.Add((New-StatCard -Label 'Included vSAN entitlement' -Value "$(Format-Number $global.TotalvSanEntitledTiB) TiB" -Sub 'Based on the selected target model and current Broadcom rules'))
+    $html.Add((New-StatCard -Label 'Total vSAN raw measured' -Value "$(Format-Number $global.TotalvSanRawTiBRequired) TiB" -Sub 'Raw capacity claimed by vSAN clusters'))
+    $html.Add((New-StatCard -Label 'Additional vSAN required' -Value "$($global.TotalvSanAddOnTiBRequired) TiB" -Sub 'Rounded additional TiB required above included entitlement'))
+    $html.Add('</div>')
+    $html.Add('<div style="height:12px"></div>')
+    $html.Add('<div class="metric-grid">')
+    $html.Add((New-ProgressBlock -Title 'Total compute requirement' -Value $global.TotalComputeCoresRequired -Max ([math]::Max(1,$global.TotalComputeCoresRequired)) -Suffix 'cores' -Tone 'blue' -Hint 'Sum of licensed cores across all assessed hosts.'))
+    $html.Add((New-ProgressBlock -Title 'vSAN entitlement coverage' -Value $global.TotalvSanEntitledTiB -Max ([math]::Max($global.TotalvSanEntitledTiB,$global.TotalvSanRawTiBRequired,1)) -Suffix 'TiB' -Tone 'green' -Hint 'Included vSAN entitlement available from selected subscriptions.'))
+    $html.Add((New-ProgressBlock -Title 'vSAN raw measured' -Value $global.TotalvSanRawTiBRequired -Max ([math]::Max($global.TotalvSanEntitledTiB,$global.TotalvSanRawTiBRequired,1)) -Suffix 'TiB' -Tone 'amber' -Hint 'Measured raw vSAN capacity claimed by the cluster(s).'))
+    $html.Add((New-ProgressBlock -Title 'Additional vSAN Add-on' -Value $global.TotalvSanAddOnTiBRequired -Max ([math]::Max($global.TotalvSanRawTiBRequired,1)) -Suffix 'TiB' -Tone 'red' -Hint 'Additional TiB required after entitlement offset.'))
+    $html.Add('</div>')
+    $html.Add('<div style="height:12px"></div>')
+    $html.Add('<div class="callout"><strong>Executive takeaway.</strong>')
+    $html.Add('<ul class="list-clean">')
+    $html.Add("<li>Total consolidated compute requirement: <strong>$($global.TotalComputeCoresRequired) cores</strong>.</li>")
+    $html.Add("<li>Total included vSAN entitlement: <strong>$(Format-Number $global.TotalvSanEntitledTiB) TiB</strong>.</li>")
+    $html.Add("<li>Total raw vSAN measured: <strong>$(Format-Number $global.TotalvSanRawTiBRequired) TiB</strong>.</li>")
+    $html.Add("<li>Additional vSAN Add-on recommended: <strong>$($global.TotalvSanAddOnTiBRequired) TiB</strong>.</li>")
+    $html.Add("<li>Objects currently detected without license: <strong>$($global.TotalObjectsWithoutLicense)</strong>.</li>")
+    $html.Add('</ul></div></div>')
 
-    $html += '<div class="section">'
-    $html += '<h2>Checagem de pré-requisitos</h2>'
-    $html += '<p class="lead">Validação da estação/sessão utilizada para execução do assessment, incluindo PowerShell, PowerCLI, privilégios e requisitos temporários de sessão.</p>'
-    $html += (($Prereqs.Checks | ConvertTo-Html -Fragment) -join "`n")
-    $html += '</div>'
+    $html.Add('<div class="section">')
+    $html.Add('<h2>Calculation standard and methodology</h2>')
+    $html.Add('<p class="lead">This report explicitly shows the active calculation model used by the script so the customer can understand how the final numbers were produced.</p>')
+    $html.Add('<div class="dual">')
+    $html.Add('<div class="calc-box">')
+    $html.Add('<h3>Current rule set</h3><ul class="list-clean">')
+    foreach ($n in $Reference.Notes) { $html.Add("<li>$(Convert-ToHtmlSafe -Text $n)</li>") }
+    $html.Add('</ul>')
+    $html.Add('<span class="formula">Compute cores per host = CPU sockets * max(actual cores per CPU, 16)</span>')
+    $html.Add('<span class="formula">Environment compute total = sum  licensed cores for all hosts</span>')
+    $html.Add('<span class="formula">VCF included vSAN entitlement = compute cores * 1.00 TiB</span>')
+    $html.Add('<span class="formula">VVF included vSAN entitlement = compute cores * 0.25 TiB</span>')
+    $html.Add('<span class="formula">vSAN Add-on required = max( ceiling(raw vSAN TiB - floor(included entitlement TiB)), 0 )</span>')
+    $html.Add('</div>')
+    $html.Add('<div class="calc-box">')
+    $html.Add('<h3>Sources referenced</h3>')
+    $html.Add("<ul class='list-clean'><li><a href='$($Reference.Kb312202)'>KB 312202</a></li><li><a href='$($Reference.Kb313548)'>KB 313548</a></li><li><a href='$($Reference.Kb400416)'>KB 400416</a></li></ul>")
+    $html.Add('<p class="small">The script uses an embedded reference matrix based on Broadcom public guidance. It does not depend on live scraping from Broadcom at runtime.</p>')
+    $html.Add('</div></div></div>')
+
+    $html.Add('<div class="section">')
+    $html.Add('<h2>Prerequisite validation</h2>')
+    $html.Add('<p class="lead">Validation of the local session used to run the assessment, including PowerShell, PowerCLI, permissions, and temporary session changes.</p>')
+    $html.Add((($Prereqs.Checks | ConvertTo-Html -Fragment) -join "`n"))
+    $html.Add('</div>')
 
     foreach ($env in $AssessmentBundle.Environments) {
         $comparison = @($env.Comparison)[0]
         $licenseSummary = @($env.LicenseSummary)[0]
+        $envMax = [double]([math]::Max(1, (@($env.Clusters | Measure-Object -Property ComputeCoresRequired -Maximum).Maximum)))
+        $envMaxRaw = [double]([math]::Max(1, (@($env.Clusters | Measure-Object -Property vSanRawTiBRequired -Maximum).Maximum, @($env.Clusters | Measure-Object -Property vSanEntitledTiB -Maximum).Maximum | Measure-Object -Maximum).Maximum))
 
-        $html += '<div class="section">'
-        $html += '<div class="env-header">'
-        $html += ("<div><h2 style='margin-bottom:4px;'>Ambiente: {0}</h2><div class='small'>vCenter: {1} | Versão: {2}</div></div>" -f (Convert-ToHtmlSafe -Text $env.Plan.Name), (Convert-ToHtmlSafe -Text $env.Server), (Convert-ToHtmlSafe -Text $env.ServerVersion))
-        $html += ("<div><span class='badge'>Modelo alvo: {0}</span><span class='badge'>Compute: {1} cores</span><span class='badge'>vSAN Add-on: {2} TiB</span></div>" -f $env.Plan.DeploymentType, $comparison.ComputeCoresRequired, $comparison.vSanAddOnTiBRequired)
-        $html += '</div>'
+        $html.Add('<div class="section">')
+        $html.Add("<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;'><div><h2 style='margin-bottom:6px;'>Environment: $(Convert-ToHtmlSafe -Text $env.Plan.Name)</h2><div class='small'>vCenter: $(Convert-ToHtmlSafe -Text $env.Server) | Version: $(Convert-ToHtmlSafe -Text $env.ServerVersion)</div></div><div class='badge-row'><span class='badge'>Target model: $($env.Plan.DeploymentType)</span><span class='badge'>Compute: $($comparison.ComputeCoresRequired) cores</span><span class='badge'>vSAN Add-on: $($comparison.vSanAddOnTiBRequired) TiB</span></div></div>")
+        $html.Add('<div style="height:12px"></div>')
+        $html.Add('<div class="stats-grid">')
+        $html.Add((New-StatCard -Label 'Recommended model' -Value "$($comparison.RecommendedModel)" -Sub 'Model inferred from measured compute and vSAN position'))
+        $html.Add((New-StatCard -Label 'Included entitlement' -Value "$(Format-Number $comparison.vSanEntitledTiB) TiB" -Sub "$($comparison.ReferenceRule)"))
+        $html.Add((New-StatCard -Label 'Raw vSAN measured' -Value "$(Format-Number $comparison.vSanRawTiBRequired) TiB" -Sub 'Rounded raw capacity used in the calculation'))
+        $html.Add((New-StatCard -Label 'Unlicensed objects' -Value "$($comparison.UnlicensedObjects)" -Sub 'Objects detected without current license assignment'))
+        $html.Add('</div>')
+        $html.Add('<div style="height:12px"></div>')
+        $html.Add('<div class="metric-grid">')
+        foreach ($cluster in $env.Clusters) {
+            $html.Add((New-ProgressBlock -Title ("$($cluster.Cluster) · Compute") -Value $cluster.ComputeCoresRequired -Max $envMax -Suffix 'cores' -Tone 'blue' -Hint ("Licensed compute after the 16-core-per-CPU rule.")))
+        }
+        foreach ($cluster in $env.Clusters) {
+            $tone = if ($cluster.vSanAddOnTiBRequired -gt 0) { 'red' } elseif ($cluster.vSanRawTiBRequired -gt 0) { 'amber' } else { 'green' }
+            $hint = if ($cluster.vSANEnabled) { "Raw $(Format-Number $cluster.vSanRawTiBRequired) TiB | Included $(Format-Number $cluster.vSanEntitledTiB) TiB | Add-on $($cluster.vSanAddOnTiBRequired) TiB" } else { 'No vSAN capacity collected for this cluster.' }
+            $html.Add((New-ProgressBlock -Title ("$($cluster.Cluster) · vSAN") -Value $cluster.vSanRawTiBRequired -Max $envMaxRaw -Suffix 'TiB' -Tone $tone -Hint $hint))
+        }
+        $html.Add('</div>')
+        $html.Add('<div style="height:12px"></div>')
+        $html.Add('<div class="callout">')
+        $html.Add("<strong>Recommended comparison.</strong> Preliminary recommendation of <strong>$($comparison.ComputeCoresRequired) cores</strong> for <strong>$($env.Plan.DeploymentType)</strong>, with <strong>$(Format-Number $comparison.vSanEntitledTiB) TiB</strong> included entitlement, <strong>$(Format-Number $comparison.vSanRawTiBRequired) TiB</strong> measured raw capacity, and <strong>$($comparison.vSanAddOnTiBRequired) TiB</strong> additional vSAN Add-on.")
+        $html.Add('</div>')
 
-        $html += '<div class="callout">'
-        $html += ("<strong>Conclusão executiva do ambiente {0}:</strong> " -f (Convert-ToHtmlSafe -Text $env.Plan.Name))
-        $html += ("Recomendação preliminar de <strong>{0} cores</strong> para o modelo <strong>{1}</strong>, com entitlement de vSAN em <strong>{2} TiB</strong>, capacidade raw apurada de <strong>{3} TiB</strong> e necessidade adicional de <strong>{4} TiB</strong> de vSAN Add-on." -f $comparison.ComputeCoresRequired, $env.Plan.DeploymentType, $comparison.vSanEntitledTiB, $comparison.vSanRawTiBRequired, $comparison.vSanAddOnTiBRequired)
-        $html += '</div>'
+        $html.Add('<h3>Calculation walkthrough</h3>')
+        $walk = foreach ($cluster in $env.Clusters) {
+            $clusterHosts = @($env.Hosts | Where-Object { $_.Cluster -eq $cluster.Cluster })
+            $socketTotal = [int](($clusterHosts | Measure-Object -Property CpuSockets -Sum).Sum)
+            $actualCores = if ($clusterHosts.Count -gt 0) { ($clusterHosts | Select-Object -First 1).CoresPerSocketActual } else { 0 }
+            $licensedPerCpu = if ($clusterHosts.Count -gt 0) { ($clusterHosts | Select-Object -First 1).CoresPerSocketLicensed } else { 0 }
+            [pscustomobject]@{
+                Cluster = $cluster.Cluster
+                Hosts = $cluster.HostCount
+                TotalCpuSockets = $socketTotal
+                ActualCoresPerCpu = $actualCores
+                LicensedCoresPerCpu = $licensedPerCpu
+                ComputeFormula = "0 sockets * 1 licensed cores" -f $socketTotal, $licensedPerCpu
+                ComputeCoresRequired = $cluster.ComputeCoresRequired
+                IncludedvSanTiB = $cluster.vSanEntitledTiB
+                RawvSanTiB = $cluster.vSanRawTiBRequired
+                vSanAddOnTiB = $cluster.vSanAddOnTiBRequired
+                CapacityMode = $cluster.CapacityCalculationMode
+                CapacityStatus = $cluster.CapacityStatus
+            }
+        }
+        $html.Add((($walk | ConvertTo-Html -Fragment) -join "`n"))
 
         if ($licenseSummary) {
-            $html += '<h3>Saúde do licenciamento atual</h3>'
-            $html += '<p class="lead">Visão resumida das licenças atuais, incluindo expiração, evaluation e objetos sem licença.</p>'
-            $html += (($env.LicenseSummary | ConvertTo-Html -Fragment) -join "`n")
+            $html.Add('<h3>Current licensing health</h3>')
+            $html.Add((($env.LicenseSummary | ConvertTo-Html -Fragment) -join "`n"))
         }
         if (@($env.LicenseInventory).Count -gt 0) {
-            $html += '<h3>Inventário de licenças disponíveis</h3>'
-            $html += '<p class="lead">Inventário retornado pelo ambiente no momento da coleta, utilizado como referência complementar para a análise.</p>'
-            $html += (($env.LicenseInventory | ConvertTo-Html -Fragment) -join "`n")
+            $html.Add('<h3>License inventory</h3>')
+            $html.Add((($env.LicenseInventory | ConvertTo-Html -Fragment) -join "`n"))
         }
         if (@($env.LicenseAssignments).Count -gt 0) {
-            $html += '<h3>Licenças atualmente atribuídas / objetos sem licença</h3>'
-            $html += (($env.LicenseAssignments | ConvertTo-Html -Fragment) -join "`n")
+            $html.Add('<h3>Current assignments and unlicensed objects</h3>')
+            $html.Add((($env.LicenseAssignments | ConvertTo-Html -Fragment) -join "`n"))
         }
-
-        $html += '<h3>Resumo por cluster</h3>'
-        $html += (($env.Clusters | ConvertTo-Html -Fragment) -join "`n")
-        $html += '<h3>Resumo por host</h3>'
-        $html += (($env.Hosts | ConvertTo-Html -Fragment) -join "`n")
-        $html += '<h3>Comparação recomendada</h3>'
-        $html += '<p class="lead">Comparativo entre o cenário apurado e a referência de licenciamento implementada no script.</p>'
-        $html += (($env.Comparison | ConvertTo-Html -Fragment) -join "`n")
-        $html += '</div>'
+        $html.Add('<h3>Cluster-level summary</h3>')
+        $html.Add((($env.Clusters | ConvertTo-Html -Fragment) -join "`n"))
+        $html.Add('<h3>Host-level summary</h3>')
+        $html.Add((($env.Hosts | ConvertTo-Html -Fragment) -join "`n"))
+        $html.Add('</div>')
     }
 
     if (@($AssessmentBundle.RuntimeChanges).Count -gt 0) {
-        $html += '<div class="section">'
-        $html += '<h2>Alterações temporárias realizadas durante a execução</h2>'
-        $html += '<p class="lead">Todas as alterações abaixo foram tratadas em escopo de sessão/processo, sem impacto permanente no ambiente virtualizado, e o script tenta restaurá-las ao final.</p>'
-        $html += ((@($AssessmentBundle.RuntimeChanges) | ConvertTo-Html -Fragment) -join "`n")
-        $html += '</div>'
+        $html.Add('<div class="section">')
+        $html.Add('<h2>Temporary runtime changes</h2>')
+        $html.Add('<p class="lead">All changes below are session-scoped, intended to avoid permanent impact to the workstation or the virtualized environment, and are restored when possible at the end of the run.</p>')
+        $html.Add(((@($AssessmentBundle.RuntimeChanges) | ConvertTo-Html -Fragment) -join "`n"))
+        $html.Add('</div>')
     }
 
     if ($script:Warnings.Count -gt 0) {
-        $html += '<div class="section">'
-        $html += '<h2>Alertas e ressalvas</h2><ul class="clean">'
-        foreach ($w in $script:Warnings) { $html += ("<li>{0}</li>" -f (Convert-ToHtmlSafe -Text $w)) }
-        $html += '</ul></div>'
+        $html.Add('<div class="section">')
+        $html.Add('<h2>Warnings and caveats</h2><ul class="list-clean">')
+        foreach ($w in $script:Warnings) { $html.Add("<li>$(Convert-ToHtmlSafe -Text $w)</li>") }
+        $html.Add('</ul></div>')
     }
 
-    $html += '<div class="section">'
-    $html += '<h2>Referências aplicadas no assessment</h2>'
-    $html += '<p class="lead">Base metodológica utilizada pelo script para cálculo, validações e interpretação do resultado.</p>'
-    $html += '<ul class="clean">'
-    foreach ($n in $Reference.Notes) { $html += ("<li>{0}</li>" -f (Convert-ToHtmlSafe -Text $n)) }
-    $html += ("<li><a href='{0}'>KB 312202</a></li>" -f $Reference.Kb312202)
-    $html += ("<li><a href='{0}'>KB 313548</a></li>" -f $Reference.Kb313548)
-    $html += ("<li><a href='{0}'>KB 400416</a></li>" -f $Reference.Kb400416)
-    $html += '</ul>'
-    $html += '<p class="small">A comparação com o catálogo público da Broadcom foi tratada no script como matriz de referência estática baseada nessas KBs, sem scraping online em tempo real.</p>'
-    $html += '</div>'
+    $html.Add('<div class="section">')
+    $html.Add('<h2>References used by the assessment</h2>')
+    $html.Add('<ul class="list-clean">')
+    foreach ($n in $Reference.Notes) { $html.Add("<li>$(Convert-ToHtmlSafe -Text $n)</li>") }
+    $html.Add("<li><a href='$($Reference.Kb312202)'>KB 312202</a></li>")
+    $html.Add("<li><a href='$($Reference.Kb313548)'>KB 313548</a></li>")
+    $html.Add("<li><a href='$($Reference.Kb400416)'>KB 400416</a></li>")
+    $html.Add('</ul></div>')
+    $html.Add("<div class='footer'>Generated by Juliano Cunha (GitHub: julianscunha)</div>")
+    $html.Add('</div></body></html>')
 
-    $html += '<div class="footer">Generated by Juliano Cunha (GitHub: julianscunha) | Assessment Executivo de Licenciamento Broadcom / VMware</div>'
-    $html += '</div></body></html>'
-    Set-Content -LiteralPath $Path -Value ($html -join "`n") -Encoding UTF8
+    $html -join "`n" | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Convert-HtmlToPdf {
@@ -1244,7 +1107,7 @@ function Convert-HtmlToPdf {
         $word.Quit()
         if (Test-Path -LiteralPath $PdfPath) { return $true }
     } catch {
-        Add-WarningItem "Não foi possível converter o relatório para PDF automaticamente: $($_.Exception.Message)"
+        Add-WarningItem "Nao foi possivel converter o relatorio para PDF automaticamente: $($_.Exception.Message)"
     }
 
     return $false
@@ -1263,9 +1126,9 @@ function Save-Outputs {
     $licensesCsv = Join-Path $Folder 'license-assignments.csv'
     $licenseInventoryCsv = Join-Path $Folder 'license-inventory.csv'
     $summaryCsv = Join-Path $Folder 'summary.csv'
-    $jsonPath = Join-Path $Folder 'broadcom-assessment.json'
-    $htmlPath = Join-Path $Folder 'broadcom-assessment-report.html'
-    $pdfPath = Join-Path $Folder 'broadcom-assessment-report.pdf'
+    $jsonPath = Join-Path $Folder 'assessment.json'
+    $htmlPath = Join-Path $Folder 'assessment-report.html'
+    $pdfPath = Join-Path $Folder 'assessment-report.pdf'
 
     $allClusters = @($AssessmentBundle.Environments | ForEach-Object { $_.Clusters })
     $allHosts = @($AssessmentBundle.Environments | ForEach-Object { $_.Hosts })
@@ -1301,48 +1164,29 @@ function Save-Outputs {
 try {
     Show-StartupBanner
     $resolvedOutput = New-OutputFolder -Path $OutputFolder
-    $script:LogFile = Join-Path $resolvedOutput 'broadcom-assessment.log'
-    Write-Log -Message 'Início da execução do assessment.'
+    $script:LogFile = Join-Path $resolvedOutput 'assessment.log'
+    Write-Log -Message 'Inicio da execucao do assessment.'
 
     if ($UseTranscript) {
         try {
             Start-Transcript -Path (Join-Path $resolvedOutput 'transcript.txt') -Force | Out-Null
         } catch {
-            Add-WarningItem "Não foi possível iniciar transcript: $($_.Exception.Message)"
+            Add-WarningItem "Nao foi possivel iniciar transcript: $($_.Exception.Message)"
         }
     }
 
     $reference = Get-ReferenceMatrix
     $prereqs = Test-Prerequisites
+    if ($prereqs.HasBlockingIssue) {
+        throw 'Existem pre-requisitos bloqueantes. Corrija os itens FAIL e execute novamente.'
+    }
 
     if (-not (Test-ExecutionPolicyAcceptable -PowerShellFacts $prereqs.PowerShell)) {
         $policyRemediation = Invoke-ExecutionPolicyRemediation -PowerShellFacts $prereqs.PowerShell
         if (-not $policyRemediation.Approved) {
-            throw 'Execution canceled: the current execution policy is not suitable and temporary Process-scope remediation was not approved.'
+            throw 'Execucao cancelada: a politica de execucao atual nao esta no padrao esperado e o ajuste temporario nao foi autorizado.'
         }
         $prereqs = Test-Prerequisites
-    }
-
-    if (Test-IsPowerCLIRemediationNeeded -PowerCLIFacts $prereqs.PowerCLI -MinimumVersion $reference.MinimumPowerCLIVersion) {
-        $moduleRemediation = Invoke-PowerCLIRemediation -MinimumVersion $reference.MinimumPowerCLIVersion
-        if (-not $moduleRemediation.Succeeded) {
-            if ($moduleRemediation.RelaunchSuggested) {
-                Write-Host ''
-                Write-Host 'PowerCLI was installed but a fresh PowerShell session may still be required.' -ForegroundColor Yellow
-                if (Get-InstallPromptDecision -Question 'Do you want the script to relaunch itself now? (Y/N)') {
-                    if (Start-SelfRelaunch -BypassExecutionPolicy) {
-                        return
-                    }
-                }
-                throw 'PowerCLI prerequisites were installed, but the current session still cannot validate them. Please run the script again.'
-            }
-            throw 'Blocking prerequisites remain unresolved. The script cannot continue without VMware PowerCLI 13.3+ and VMware.VimAutomation.Core.'
-        }
-        $prereqs = Test-Prerequisites
-    }
-
-    if ($prereqs.HasBlockingIssue) {
-        throw 'Blocking prerequisites remain unresolved. Review the FAIL items and run the script again.'
     }
 
     Ensure-PowerCLILoaded
@@ -1404,7 +1248,7 @@ try {
         if ($_.Value) { Write-Host ("- {0}: {1}" -f $_.Name, $_.Value) }
     }
     Write-Host ''
-    Write-Host 'Assessment concluído.' -ForegroundColor Green
+    Write-Host 'Assessment concluido.' -ForegroundColor Green
 }
 catch {
     Write-Log -Level ERROR -Message $_.Exception.Message
@@ -1412,8 +1256,6 @@ catch {
 }
 finally {
     try { Restore-CertificateHandling } catch { }
-    try { Restore-TemporaryPSGalleryTrust } catch { }
-    try { Restore-TemporarySecurityProtocol } catch { }
     try { Restore-ExecutionPolicyRemediation } catch { }
     try {
         if ($UseTranscript) { Stop-Transcript | Out-Null }
