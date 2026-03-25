@@ -1,6 +1,7 @@
-# VMware Broadcom License Assessment Tool
+# Broadcom License Assessment Tool
 # Author: Juliano Cunha (https://github.com/julianscunha)
 # Repository: https://github.com/julianscunha
+# File: BroadcomLicenseAssessmentTool.ps1
 # Description: Automated assessment for VCF/VVF/vSAN licensing based on Broadcom public guidance
 # License: MIT
 
@@ -1262,9 +1263,9 @@ function Save-Outputs {
     $licensesCsv = Join-Path $Folder 'license-assignments.csv'
     $licenseInventoryCsv = Join-Path $Folder 'license-inventory.csv'
     $summaryCsv = Join-Path $Folder 'summary.csv'
-    $jsonPath = Join-Path $Folder 'assessment.json'
-    $htmlPath = Join-Path $Folder 'assessment-report.html'
-    $pdfPath = Join-Path $Folder 'assessment-report.pdf'
+    $jsonPath = Join-Path $Folder 'broadcom-assessment.json'
+    $htmlPath = Join-Path $Folder 'broadcom-assessment-report.html'
+    $pdfPath = Join-Path $Folder 'broadcom-assessment-report.pdf'
 
     $allClusters = @($AssessmentBundle.Environments | ForEach-Object { $_.Clusters })
     $allHosts = @($AssessmentBundle.Environments | ForEach-Object { $_.Hosts })
@@ -1300,7 +1301,7 @@ function Save-Outputs {
 try {
     Show-StartupBanner
     $resolvedOutput = New-OutputFolder -Path $OutputFolder
-    $script:LogFile = Join-Path $resolvedOutput 'assessment.log'
+    $script:LogFile = Join-Path $resolvedOutput 'broadcom-assessment.log'
     Write-Log -Message 'Início da execução do assessment.'
 
     if ($UseTranscript) {

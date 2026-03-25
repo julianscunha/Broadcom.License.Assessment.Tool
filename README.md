@@ -1,4 +1,4 @@
-# VMware Broadcom License Assessment Tool
+# Broadcom License Assessment Tool
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![VMware](https://img.shields.io/badge/VMware-vSphere%207%2F8-green)
@@ -167,9 +167,9 @@ The tool can generate:
 - `licenses.csv`
 - `license-inventory.csv`
 - `summary.csv`
-- `assessment.json`
-- `assessment.html`
-- `assessment.pdf` (best effort)
+- `broadcom-assessment.json`
+- `broadcom-assessment-report.html`
+- `broadcom-assessment-report.pdf` (best effort)
 
 ## Example output
 
@@ -191,3 +191,11 @@ Contributions are welcome. Issues, pull requests, and improvement ideas are enco
 ## License
 
 MIT License. See the `LICENSE` file.
+
+
+## Example output
+
+Sample dashboard-style outputs are included:
+
+- `EXAMPLE-OUTPUT-ADVANCED-v2.md`
+- `EXAMPLE-OUTPUT-ADVANCED-v2.html`
