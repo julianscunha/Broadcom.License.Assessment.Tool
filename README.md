@@ -6,25 +6,25 @@
 ![Status](https://img.shields.io/badge/Status-Active-blue)
 ![Maintained](https://img.shields.io/badge/Maintained-Yes-brightgreen)
 ![Contributions](https://img.shields.io/badge/Contributions-Welcome-orange)
-![Author](https://img.shields.io/badge/GitHub-julianscunha-black)
+![GitHub](https://img.shields.io/badge/GitHub-julianscunha-black)
 
-Automated PowerShell-based assessment tool for VMware environments, designed to calculate licensing requirements under Broadcom's subscription model for **VMware Cloud Foundation (VCF)**, **vSphere Foundation (VVF)**, and **vSAN Add-on**.
+Automated PowerShell-based assessment tool for VMware environments, built to calculate licensing requirements under Broadcom's subscription model for **VMware Cloud Foundation (VCF)**, **VMware vSphere Foundation (VVF)**, and **vSAN Add-on**.
 
 Developed by [Juliano Cunha](https://github.com/julianscunha).
 
 ## Overview
 
-This script connects to one or more vCenter environments, validates local prerequisites, inspects clusters and hosts, calculates licensing needs based on Broadcom public guidance, and generates both technical and executive-friendly outputs.
+This tool connects to one or more vCenter environments, validates local prerequisites, inspects clusters and hosts, calculates licensing needs according to Broadcom public guidance, checks the current licensing state, and generates both technical artifacts and an executive dashboard report.
 
 It is intended for consultants, partners, pre-sales engineers, architects, and administrators who need a repeatable way to assess environments and prepare licensing discussions or commercial proposals.
 
-## Key Features
+## What the tool does
 
-- Validates local prerequisites before assessment starts:
+- Validates local prerequisites before the assessment starts:
   - PowerShell version
   - VMware PowerCLI availability and version
   - execution policy suitability
-  - session-only certificate handling when required
+  - temporary certificate handling when required
 - Safely handles `ExecutionPolicy` in **Process** scope only, with user confirmation
 - Supports **multiple environments / multiple vCenters** in a single run
 - Calculates required licensing for:
@@ -36,180 +36,109 @@ It is intended for consultants, partners, pre-sales engineers, architects, and a
   - **vSAN raw physical capacity** as the licensing basis
   - VCF entitlement of **1 TiB per core**
   - VVF entitlement of **0.25 TiB per core**
-- Detects and flags environments that may require updated logic for **vSphere / vSAN 8.0 U3+**
-- Optionally collects current license assignments and inventory details
-- Highlights licensing risks in the current environment, including:
+- Detects current licensing information when available:
+  - license assignments
   - expired licenses
-  - licenses approaching expiration
-  - evaluation mode usage
-  - objects without license assignment
-- Produces multiple output formats:
-  - console summary
-  - log file
-  - CSV
-  - JSON
-  - HTML
-  - PDF (best-effort, depending on local conversion capability)
-- Creates a more executive-style report suitable for customer-facing review
+  - licenses expiring in 30/90 days
+  - evaluation mode
+  - unlicensed objects
+- Generates a dashboard-style HTML report and can optionally convert it to PDF
+- Exports JSON and CSV outputs for deeper technical analysis
 
-## Licensing Logic
+## Dashboard-style reporting
 
-The script follows Broadcom public guidance referenced in knowledge base articles related to VCF/VVF sizing and licensing calculations.
+The advanced HTML/PDF report includes:
 
-Core assumptions implemented in the script:
+- executive KPI cards
+- visual capacity bars for compute, entitlement, raw vSAN, and additional add-on need
+- cluster-by-cluster breakdown
+- host-by-host breakdown
+- explicit calculation walkthrough tables
+- clear statement of the active rule set and formulas used
+- warning and caveat section
+- reference section with the Broadcom KBs used by the script
 
-- Each physical CPU is counted with a **minimum of 16 cores**
-- vSAN licensing is based on **raw physical claimed capacity**, not usable capacity
-- Included vSAN entitlement depends on the selected subscription model:
-  - **VCF**: 1 TiB per licensed core
-  - **VVF**: 0.25 TiB per licensed core
-- When environment data is inconsistent (for example, possible stale devices or storage health issues), the script attempts to keep the assessment usable and records warnings in the final report
+See the included examples:
+
+- [Advanced markdown example](EXAMPLE-OUTPUT-ADVANCED.md)
+- [Advanced HTML example](EXAMPLE-OUTPUT-ADVANCED.html)
+
+## Licensing model implemented
+
+The current rule set embedded in the script is based on Broadcom public guidance:
+
+- **Compute cores per host** = physical CPU sockets × `max(actual cores per CPU, 16)`
+- **Environment compute total** = sum of licensed cores across all hosts
+- **VCF included vSAN entitlement** = compute cores × `1.00 TiB`
+- **VVF included vSAN entitlement** = compute cores × `0.25 TiB`
+- **vSAN Add-on required** = `max( ceil(raw vSAN TiB - floor(included entitlement TiB)), 0 )`
+
+The tool also includes the updated path for **vSphere / vSAN 8.0 U3 and later**, where the older direct claimed-capacity API path is no longer valid.
 
 ## Requirements
 
-- Windows PowerShell 5.1+ or PowerShell 7+
+- PowerShell 5.1 or later
 - VMware PowerCLI 13.3 or later
-- Network connectivity to the target vCenter(s)
-- Credentials with sufficient read permissions to collect inventory and licensing information
+- Network access to the target vCenter Server(s)
+- Sufficient privileges in vCenter to read inventory, cluster, host, vSAN, and license information
+- For PDF export:
+  - Microsoft Edge or Google Chrome in headless mode, or
+  - Microsoft Word COM automation as a fallback
 
-## Safety and Change Control
-
-This tool is designed to avoid permanent changes.
-
-- `ExecutionPolicy` adjustments are only made in **Process** scope
-- certificate handling changes are session-scoped whenever possible
-- no configuration changes are made to vCenter, ESXi, vSAN, or workloads
-- temporary changes made by the script are tracked and included in the final report
-- the script attempts to restore temporary session settings at the end of execution
-
-## Basic Usage
-
-```powershell
-.\Invoke-BroadcomLicenseAssessment-GitHub.ps1
-```
-
-Example with optional switches:
-
-```powershell
-.\Invoke-BroadcomLicenseAssessment-GitHub.ps1 -TrustInvalidCertificates -DisconnectWhenDone -ExportPdf -CollectLicenseAssignments
-```
-
-## Optional Parameters
-
-- `-OutputFolder`
-  - Sets a custom output path
-- `-ConfigFile`
-  - Allows loading pre-defined environment input from a file
-- `-ExportPdf`
-  - Attempts PDF export in addition to HTML
-- `-CollectLicenseAssignments`
-  - Collects current licensing assignments and license inventory
-- `-TrustInvalidCertificates`
-  - Allows temporary handling of self-signed / untrusted certificates during the session
-- `-DisconnectWhenDone`
-  - Disconnects active PowerCLI sessions at the end
-- `-SkipPrereqInstallHints`
-  - Reduces prerequisite guidance prompts
-- `-UseTranscript`
-  - Enables PowerShell transcript logging when supported
-
-## Execution Policy Behavior
-
-You do **not** have to run `Set-ExecutionPolicy` manually before launching the script.
-
-At the start of execution, the script checks whether the current session is allowed to run as expected. If not, it can prompt the user to apply:
+## Typical usage
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\Invoke-BroadcomLicenseAssessment-GitHub-Advanced.ps1 -TrustInvalidCertificates -CollectLicenseAssignments -DisconnectWhenDone -ExportPdf
 ```
 
-This is temporary and only affects the current PowerShell session.
+You can also run without the temporary execution policy change if your system policy already allows local scripts.
 
-## Interactive Flow
+## Output files
 
-During execution, the script can prompt for:
+Typical output folder contents:
 
-1. friendly environment name
-2. vCenter FQDN or IP
-3. target licensing model (`VCF` or `VVF`)
-4. whether to assess all clusters or a specific cluster
-5. whether another environment should be added to the same run
-
-## Generated Outputs
-
-The script creates an output folder containing files such as:
-
-- `assessment.log`
+- `assessment-data.json`
 - `clusters.csv`
 - `hosts.csv`
-- `summary.csv`
-- `license-assignments.csv` *(when collected)*
-- `license-inventory.csv` *(when collected)*
-- `assessment.json`
+- `license-assignments.csv`
+- `license-inventory.csv`
 - `assessment-report.html`
-- `assessment-report.pdf` *(if conversion succeeds)*
+- `assessment-report.pdf` *(optional)*
+- `execution.log`
 
-## Example Output
+## Safety and runtime behavior
 
-A sample output file is included in this repository:
+- No permanent changes are made to the virtualized environment
+- Session-only changes can be applied when needed, with user confirmation:
+  - `ExecutionPolicy` in **Process** scope only
+  - temporary PowerCLI invalid certificate handling
+- The script attempts to restore temporary session settings at the end of the run
+- Any temporary changes are listed in the final report
 
-- [EXAMPLE-OUTPUT.md](EXAMPLE-OUTPUT.md)
+## Reference KBs
 
-Example executive summary:
+- Broadcom KB 312202 — License calculator for VCF, VVF and vSAN
+- Broadcom KB 313548 — Counting cores for VCF/VVF and TiBs for vSAN
+- Broadcom KB 400416 — Updated script path for vSphere / vSAN 8.0 U3
+
+## Repository structure suggestion
 
 ```text
-Environment: Production vCenter
-Licensing Model: VVF
-Clusters Assessed: 2
-
-Required VVF Compute Licenses: 144 cores
-Included vSAN Entitlement: 36 TiB
-Detected vSAN Raw Capacity: 78.6 TiB
-Required vSAN Add-on: 43 TiB
-
-License Health:
-- 2 licenses expiring within 90 days
-- 1 host without assigned license
-- No expired licenses detected
+.
+├── Invoke-BroadcomLicenseAssessment-GitHub-Advanced.ps1
+├── README.md
+├── LICENSE
+├── EXAMPLE-OUTPUT-ADVANCED.md
+└── EXAMPLE-OUTPUT-ADVANCED.html
 ```
-
-## Report Highlights
-
-The HTML/PDF report is organized for easier executive consumption and typically includes:
-
-- assessment summary
-- environment-by-environment overview
-- required VCF/VVF core quantities
-- included vSAN entitlement
-- raw vSAN capacity identified
-- required vSAN Add-on quantities
-- current license status overview
-- possible unlicensed objects
-- expiration risk indicators
-- temporary runtime changes performed by the script
-- technical notes and warnings
-
-## Typical Use Cases
-
-- pre-sales licensing assessments
-- customer environment discovery
-- migration planning to Broadcom subscriptions
-- internal compliance reviews
-- proposal preparation support
 
 ## Disclaimer
 
-This project is **not officially affiliated with Broadcom or VMware**.
-It is an independent community tool based on publicly available documentation and operational interpretation of those materials.
+This project is **not officially affiliated with Broadcom or VMware**. It is an independent community tool based on publicly available documentation and implementation best practices.
 
-Always validate final commercial quantities with your own licensing team, distributor, or official Broadcom guidance before issuing a binding proposal.
+Always validate the final commercial position with an authorized partner or with Broadcom when required.
 
 ## Contributing
 
-Issues, suggestions, and pull requests are welcome.
-
-If you improve support for additional scenarios, reports, or validation logic, contributions back to the project are encouraged.
-
-## License
-
-This project is released under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+Contributions are welcome through issues and pull requests.
