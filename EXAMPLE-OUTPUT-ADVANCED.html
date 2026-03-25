@@ -81,7 +81,7 @@ small.muted { color:var(--muted); }
       <thead><tr><th>Cluster</th><th>Walkthrough</th><th>Result</th></tr></thead>
       <tbody>
         <tr><td>CLUSTER-VSAN-PROD</td><td>3 hosts x (1 socket x max(16,16)) = 48 cores. VVF entitlement = 48 x 0.25 = 12 TiB. Raw vSAN = 78.6 TiB. Add-on = ceil(78.6) - floor(12) = 67 TiB.</td><td><strong>48 cores</strong><br/><strong>67 TiB add-on</strong></td></tr>
-        <tr><td>CLUSTER-DR-SAUDALI</td><td>3 hosts x (2 sockets x max(6,16)) = 96 cores. VVF entitlement = 96 x 0.25 = 24 TiB. Raw vSAN = 0 TiB. Add-on = max(ceil(0) - floor(24),0) = 0.</td><td><strong>96 cores</strong><br/><strong>0 TiB add-on</strong></td></tr>
+        <tr><td>CLUSTER-DR</td><td>3 hosts x (2 sockets x max(6,16)) = 96 cores. VVF entitlement = 96 x 0.25 = 24 TiB. Raw vSAN = 0 TiB. Add-on = max(ceil(0) - floor(24),0) = 0.</td><td><strong>96 cores</strong><br/><strong>0 TiB add-on</strong></td></tr>
       </tbody>
     </table>
   </div>
