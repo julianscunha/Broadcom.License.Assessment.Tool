@@ -1,5 +1,13 @@
 # VMware Broadcom License Assessment Tool
 
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![VMware](https://img.shields.io/badge/VMware-vSphere%208%2B-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+![Status](https://img.shields.io/badge/Status-Active-blue)
+![Maintained](https://img.shields.io/badge/Maintained-Yes-brightgreen)
+![Contributions](https://img.shields.io/badge/Contributions-Welcome-orange)
+![Author](https://img.shields.io/badge/GitHub-julianscunha-black)
+
 Automated PowerShell-based assessment tool for VMware environments, designed to calculate licensing requirements under Broadcom's subscription model for **VMware Cloud Foundation (VCF)**, **vSphere Foundation (VVF)**, and **vSAN Add-on**.
 
 Developed by [Juliano Cunha](https://github.com/julianscunha).
@@ -140,6 +148,30 @@ The script creates an output folder containing files such as:
 - `assessment.json`
 - `assessment-report.html`
 - `assessment-report.pdf` *(if conversion succeeds)*
+
+## Example Output
+
+A sample output file is included in this repository:
+
+- [EXAMPLE-OUTPUT.md](EXAMPLE-OUTPUT.md)
+
+Example executive summary:
+
+```text
+Environment: Production vCenter
+Licensing Model: VVF
+Clusters Assessed: 2
+
+Required VVF Compute Licenses: 144 cores
+Included vSAN Entitlement: 36 TiB
+Detected vSAN Raw Capacity: 78.6 TiB
+Required vSAN Add-on: 43 TiB
+
+License Health:
+- 2 licenses expiring within 90 days
+- 1 host without assigned license
+- No expired licenses detected
+```
 
 ## Report Highlights
 

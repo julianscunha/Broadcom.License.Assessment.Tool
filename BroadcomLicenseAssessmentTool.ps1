@@ -56,7 +56,7 @@ function Show-StartupBanner {
     $banner = @(
         '==============================================================',
         'Developed by Juliano Cunha (GitHub: julianscunha)',
-        'Assessment de Licenciamento Broadcom / VMware',
+        'Broadcom / VMware Licensing Assessment',
         '=============================================================='
     )
     Write-Host ''
