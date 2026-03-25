@@ -181,7 +181,3 @@ If you improve support for additional scenarios, reports, or validation logic, c
 ## License
 
 This project is released under the **MIT License**. See the [LICENSE](LICENSE) file for details.
-
-## Prerequisite bootstrap behavior
-
-If VMware PowerCLI 13.3+ is missing or outdated, the script asks whether it should install or update the module in `CurrentUser` scope during the same run. It also bootstraps TLS 1.2, NuGet and PSGallery trust when needed. If the current PowerShell session cannot refresh the module path after installation, the script offers to relaunch itself automatically in a new PowerShell session.
