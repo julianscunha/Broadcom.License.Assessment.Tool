@@ -91,13 +91,13 @@ If PowerCLI needs a fresh PowerShell session after installation, the script can 
 ## Basic usage
 
 ```powershell
-.\Invoke-BroadcomLicenseAssessment-GitHub-Final.ps1
+.\BroadcomLicenseAssessmentTool.ps1
 ```
 
 Example with optional switches:
 
 ```powershell
-.\Invoke-BroadcomLicenseAssessment-GitHub-Final.ps1 -TrustInvalidCertificates -DisconnectWhenDone -ExportPdf -CollectLicenseAssignments
+.\BroadcomLicenseAssessmentTool.ps1 -TrustInvalidCertificates -DisconnectWhenDone -ExportPdf -CollectLicenseAssignments
 ```
 
 ## Typical execution flow
