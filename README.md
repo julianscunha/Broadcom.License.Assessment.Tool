@@ -126,7 +126,7 @@ Typical output folder contents:
 
 ```text
 .
-├── Invoke-BroadcomLicenseAssessment-GitHub-Advanced.ps1
+├── BroadcomLicenseAssessmentTool.ps1
 ├── README.md
 ├── LICENSE
 ├── EXAMPLE-OUTPUT-ADVANCED.md
