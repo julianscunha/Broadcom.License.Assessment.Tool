@@ -191,11 +191,3 @@ Contributions are welcome. Issues, pull requests, and improvement ideas are enco
 ## License
 
 MIT License. See the `LICENSE` file.
-
-
-## Example output
-
-Sample dashboard-style outputs are included:
-
-- `EXAMPLE-OUTPUT-ADVANCED-v2.md`
-- `EXAMPLE-OUTPUT-ADVANCED-v2.html`
