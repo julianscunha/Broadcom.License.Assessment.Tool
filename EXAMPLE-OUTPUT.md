@@ -1,22 +1,33 @@
-# EXAMPLE-OUTPUT
 
-## Executive takeaways
+# Example Output - Broadcom License Assessment
 
-- Required compute cores: 1664
-- Included entitlement under selected model: 416 TiB
-- Measured raw vSAN: 0 TiB
-- Required vSAN Add-on: 0 TiB
-- Risk score: 5/100 (Low)
-- Suggested direction: VVF
+## Executive Summary
+- Customer: Example Corp
+- Recommended Model: VVF
+- Risk Score: 12/100 (Low)
 
-## Financial comparison example
+## Core Metrics
+- Required Compute Cores: 1280
+- Included vSAN Entitlement: 320 TiB
+- Raw vSAN Consumption: 210 TiB
+- Required Add-on: 0 TiB
 
-Currency: BRL
+## Financial Comparison
+| Model | Cost |
+|------|------|
+| VVF | BRL 160,000 |
+| VCF | BRL 230,000 |
 
-| Model | Core unit price | Add-on unit price | Required cores | Required add-on TiB | Estimated total |
-|---|---:|---:|---:|---:|---:|
-| VVF | 125 | 450 | 1664 | 0 | 208000 |
-| VCF | 165 | 450 | 1664 | 0 | 274560 |
+Delta: +70,000 (VCF higher)
 
-Estimated cheaper model: VVF  
-Delta (VCF - VVF): BRL 66560
+## License Inventory
+| License | Edition | Total | Used | Expiration |
+|--------|--------|------|------|-----------|
+| vSphere | Enterprise Plus | 64 | 60 | 2027-01-01 |
+| vSAN | Advanced | 200 | 180 | 2026-06-01 |
+
+## Cluster Details
+| Cluster | Hosts | Cores | Raw vSAN |
+|--------|------|------|----------|
+| Cluster-A | 8 | 640 | 100 TiB |
+| Cluster-B | 8 | 640 | 110 TiB |

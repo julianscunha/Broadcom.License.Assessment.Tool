@@ -1,29 +1,66 @@
+
 <!DOCTYPE html>
-<html><head><meta charset="utf-8" /><title>EXAMPLE-OUTPUT</title>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Example Output - Broadcom Assessment</title>
 <style>
-body{font-family:Segoe UI,Arial,sans-serif;background:#f3f6fb;color:#0f172a;margin:0}
-.wrap{max-width:1100px;margin:24px auto;padding:0 18px}
-.card{background:#fff;border:1px solid #dbe3ef;border-radius:18px;padding:20px;margin-top:18px}
-.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
-.kpi-label{font-size:13px;color:#475569}.kpi-value{font-size:30px;font-weight:700}
-.bar-bg{background:#e5e7eb;height:14px;border-radius:9px;overflow:hidden}
-.green{background:#16a34a;height:100%}.blue{background:#2563eb;height:100%}
-table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #dbe3ef;padding:10px 8px;text-align:left}
-</style></head><body><div class="wrap">
-<div class="card"><h1>Broadcom / VMware License Assessment - Example</h1><p>Financial comparison illustration for proposal teams.</p></div>
-<div class="grid">
-<div class="card"><div class="kpi-label">Required Compute Cores</div><div class="kpi-value">1664</div></div>
-<div class="card"><div class="kpi-label">Included vSAN Entitlement (TiB)</div><div class="kpi-value">416</div></div>
-<div class="card"><div class="kpi-label">Measured Raw vSAN (TiB)</div><div class="kpi-value">0</div></div>
-<div class="card"><div class="kpi-label">Required vSAN Add-on (TiB)</div><div class="kpi-value">0</div></div>
+body {font-family: Arial; background:#f4f6fb; margin:0; padding:20px;}
+.card {background:#fff; border-radius:12px; padding:20px; margin-bottom:20px;}
+h1,h2 {margin:0 0 10px 0;}
+table {width:100%; border-collapse:collapse;}
+th,td {padding:8px; border-bottom:1px solid #ddd;}
+.bar {height:14px; background:#ddd; border-radius:8px;}
+.fill {height:100%; background:#2563eb;}
+</style>
+</head>
+<body>
+
+<div class="card">
+<h1>Broadcom License Assessment</h1>
+<p><b>Customer:</b> Example Corp</p>
+<p><b>Model Recommendation:</b> VVF</p>
+<p><b>Risk Score:</b> 12/100 (Low)</p>
 </div>
-<div class="card"><h2>Financial Comparison - VVF vs VCF</h2>
-<table><thead><tr><th>Model</th><th>Core unit price</th><th>Add-on unit price</th><th>Required cores</th><th>Required add-on TiB</th><th>Total</th></tr></thead>
-<tbody>
-<tr><td>VVF</td><td>BRL 125</td><td>BRL 450</td><td>1664</td><td>0</td><td><strong>BRL 208000</strong></td></tr>
-<tr><td>VCF</td><td>BRL 165</td><td>BRL 450</td><td>1664</td><td>0</td><td><strong>BRL 274560</strong></td></tr>
-</tbody></table>
-<div style="margin-top:14px">VVF - BRL 208000</div><div class="bar-bg"><div class="green" style="width:76%"></div></div>
-<div style="margin-top:14px">VCF - BRL 274560</div><div class="bar-bg"><div class="blue" style="width:100%"></div></div>
+
+<div class="card">
+<h2>Core Metrics</h2>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Required Compute Cores</td><td>1280</td></tr>
+<tr><td>Included vSAN Entitlement</td><td>320 TiB</td></tr>
+<tr><td>Raw vSAN Consumption</td><td>210 TiB</td></tr>
+<tr><td>Required Add-on</td><td>0 TiB</td></tr>
+</table>
 </div>
-</div></body></html>
+
+<div class="card">
+<h2>Financial Comparison</h2>
+<table>
+<tr><th>Model</th><th>Total Cost</th></tr>
+<tr><td>VVF</td><td>BRL 160,000</td></tr>
+<tr><td>VCF</td><td>BRL 230,000</td></tr>
+</table>
+<p><b>Delta:</b> +70,000 (VCF higher)</p>
+</div>
+
+<div class="card">
+<h2>License Inventory</h2>
+<table>
+<tr><th>License</th><th>Edition</th><th>Total</th><th>Used</th><th>Expires</th></tr>
+<tr><td>vSphere</td><td>Enterprise Plus</td><td>64</td><td>60</td><td>2027-01-01</td></tr>
+<tr><td>vSAN</td><td>Advanced</td><td>200</td><td>180</td><td>2026-06-01</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>Cluster Breakdown</h2>
+<table>
+<tr><th>Cluster</th><th>Hosts</th><th>Cores</th><th>Raw vSAN</th></tr>
+<tr><td>Cluster-A</td><td>8</td><td>640</td><td>100 TiB</td></tr>
+<tr><td>Cluster-B</td><td>8</td><td>640</td><td>110 TiB</td></tr>
+</table>
+</div>
+
+</body>
+</html>
