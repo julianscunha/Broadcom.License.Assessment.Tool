@@ -1,24 +1,23 @@
 # EXAMPLE-OUTPUT
 
-This example shows the Gartner-style executive dashboard with automatic light/dark theme support.
+## Executive Summary
 
-## Headline figures
+- Customer: ACME Corp
+- Required compute cores: 144
+- Included vSAN entitlement: 36.00 TiB
+- Measured raw vSAN: 92.40 TiB
+- Required vSAN Add-on: 57 TiB
 
-- Total VVF cores required: **144**
-- Included vSAN entitlement: **36 TiB**
-- Raw vSAN measured: **78.6 TiB**
-- vSAN Add-on required: **67 TiB**
+## Dashboard
 
-## Formulas used
+- Compute required: 144
+- Included entitlement TiB: 36.00
+- Measured raw vSAN TiB: 92.40
+- Required vSAN Add-on TiB: 57
 
-- Adjusted cores per host = `CPU sockets x max(actual cores per CPU, 16)`
-- Included vSAN entitlement (VVF) = `Total required cores x 0.25 TiB`
-- Required vSAN Add-on = `max(ceil(raw vSAN TiB) - floor(included entitlement TiB), 0)`
+## Cluster Calculations
 
-## Dashboard sections
-
-- Executive summary
-- Assessment health
-- Consumption dashboard
-- Per-environment calculation walkthrough
-- Cluster detail
+| Server | Cluster | Hosts | Required cores | Included TiB | Raw vSAN TiB | Required Add-on TiB |
+|---|---|---:|---:|---:|---:|---:|
+| vcsa-prod.local | PROD-CLUSTER | 3 | 96 | 24.00 | 78.60 | 55 |
+| vcsa-dr.local | DR-CLUSTER | 3 | 48 | 12.00 | 13.80 | 2 |

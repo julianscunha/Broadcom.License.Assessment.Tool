@@ -1,608 +1,587 @@
-#requires -Version 5.1
-<#!
+<#
 .SYNOPSIS
-  Broadcom License Assessment Tool
+Broadcom License Assessment Tool
 .DESCRIPTION
-  Interactive PowerShell assessment for VMware environments under Broadcom licensing.
-  Developed by Juliano Cunha (https://github.com/julianscunha)
-.NOTES
-  Version: 1.0.0
+Interactive PowerShell assessment tool for VMware / Broadcom licensing.
+.PARAMETER Help
+Shows detailed help and exits.
+.PARAMETER CustomerName
+Customer or company name to stamp on reports and exported file names.
+.PARAMETER DeploymentType
+Licensing model to calculate. Accepted values: VVF or VCF. Default: VVF.
+.PARAMETER TrustInvalidCertificates
+Automatically ignore invalid certificates for the current PowerCLI session.
+.PARAMETER DisconnectWhenDone
+Disconnect all connected VIServers at the end of the run.
+.PARAMETER ExportPdf
+Attempt to export the generated HTML report to PDF.
+.PARAMETER CollectLicenseAssignments
+Collect current assigned license information for hosts and clusters.
+.EXAMPLE
+.\BroadcomLicenseAssessmentTool.ps1 -Help
+.EXAMPLE
+Get-Help .\BroadcomLicenseAssessmentTool.ps1 -Full
 #>
+
 [CmdletBinding()]
 param(
+    [Alias('h','?')]
+    [switch]$Help,
+    [string]$CustomerName,
     [ValidateSet('VVF','VCF')]
-    [string]$DefaultDeploymentType = 'VVF',
+    [string]$DeploymentType = 'VVF',
     [switch]$TrustInvalidCertificates,
-    [switch]$CollectLicenseAssignments,
     [switch]$DisconnectWhenDone,
     [switch]$ExportPdf,
-    [string]$OutputFolder = '.'
+    [switch]$CollectLicenseAssignments
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolName = 'BroadcomLicenseAssessmentTool'
-$script:ToolVersion = '1.0.0'
-$script:AuthorLine = 'Developed by Juliano Cunha (GitHub: julianscunha)'
-$script:LogPath = Join-Path -Path $OutputFolder -ChildPath 'broadcom-assessment.log'
-$script:SessionState = [ordered]@{
-    ProcessExecutionPolicyChanged = $false
-    PreviousPowerCLICertAction = $null
-    CompanyName = ''
+$script:ToolName = 'Broadcom License Assessment Tool'
+$script:Version = '1.1.0'
+$script:BrandMode = 'Public'
+$script:StartTime = Get-Date
+$script:LogLines = New-Object System.Collections.Generic.List[string]
+$script:ConnectedServers = New-Object System.Collections.Generic.List[object]
+$script:SessionTweaks = [ordered]@{
+    ExecutionPolicyBypassApplied = $false
+    InvalidCertificateIgnoreApplied = $false
 }
+$script:OriginalPreferences = [ordered]@{
+    WarningPreference = $WarningPreference
+    InformationPreference = $InformationPreference
+    ProgressPreference = $ProgressPreference
+}
+$script:OutputRoot = Join-Path -Path (Get-Location) -ChildPath 'output'
+
+function Show-Usage {
+@"
+$($script:ToolName) v$($script:Version)
+
+Usage:
+  .\BroadcomLicenseAssessmentTool.ps1 [options]
+
+Options:
+  -Help                         Show this help text and exit
+  -CustomerName <string>        Customer / company name shown in the report
+  -DeploymentType <VVF|VCF>     Licensing model to calculate (default: VVF)
+  -TrustInvalidCertificates     Ignore invalid certificates automatically
+  -DisconnectWhenDone           Disconnect VIServers at the end
+  -ExportPdf                    Try to export the HTML report to PDF
+  -CollectLicenseAssignments    Collect currently assigned licenses
+
+Examples:
+  .\BroadcomLicenseAssessmentTool.ps1
+  .\BroadcomLicenseAssessmentTool.ps1 -CustomerName "ACME Corp" -DeploymentType VVF -ExportPdf
+  Get-Help .\BroadcomLicenseAssessmentTool.ps1 -Full
+"@ | Write-Host
+}
+
+if ($Help) { Show-Usage; return }
 
 function Write-Log {
     param(
         [Parameter(Mandatory=$true)][string]$Message,
-        [ValidateSet('INFO','WARN','ERROR','OK')][string]$Level = 'INFO'
+        [ValidateSet('INFO','OK','WARN','ERROR')][string]$Level = 'INFO',
+        [ConsoleColor]$Color = [ConsoleColor]::Gray
     )
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $line = ('[{0}] [{1}] {2}' -f $timestamp, $Level, $Message)
-    Write-Host $line -ForegroundColor @{
-        INFO='Cyan'; WARN='Yellow'; ERROR='Red'; OK='Green'
-    }[$Level]
-    Add-Content -Path $script:LogPath -Value $line
-}
-
-function Read-YesNo {
-    param(
-        [Parameter(Mandatory=$true)][string]$Prompt,
-        [bool]$Default = $true
-    )
-    $suffix = if ($Default) { '[Y/n]' } else { '[y/N]' }
-    while ($true) {
-        $answer = Read-Host ("{0} {1}" -f $Prompt, $suffix)
-        if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
-        switch ($answer.Trim().ToLowerInvariant()) {
-            'y' { return $true }
-            'yes' { return $true }
-            'n' { return $false }
-            'no' { return $false }
-        }
-    }
-}
-
-
-function Restart-ScriptSessionIfRequested {
-    param(
-        [string]$Reason = 'A new PowerShell session is recommended to continue.'
-    )
-    Write-Log -Message $Reason -Level 'WARN'
-    if (-not (Read-YesNo -Prompt 'Restart this script automatically in a new PowerShell session now?' -Default $true)) {
-        throw 'A new session is required. Please run the script again.'
-    }
-    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', ('"' + $PSCommandPath + '"'))
-    foreach ($bound in $PSBoundParameters.GetEnumerator()) {
-        if ($bound.Value -is [switch]) {
-            if ($bound.Value.IsPresent) { $argList += ('-' + $bound.Key) }
-        }
-        elseif ($null -ne $bound.Value) {
-            $argList += @(('-' + $bound.Key), ('"' + [string]$bound.Value + '"'))
-        }
-    }
-    Start-Process -FilePath 'powershell.exe' -ArgumentList ($argList -join ' ')
-    exit
-}
-
-function ConvertTo-SafeHtml {
-    param([AllowNull()][string]$Text)
-    if ($null -eq $Text) { return '' }
-    return [System.Net.WebUtility]::HtmlEncode($Text)
-}
-
-function New-OutputFolder {
-    if (-not (Test-Path -LiteralPath $OutputFolder)) {
-        New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
-    }
-    if (Test-Path -LiteralPath $script:LogPath) {
-        Remove-Item -LiteralPath $script:LogPath -Force
-    }
-    New-Item -ItemType File -Path $script:LogPath -Force | Out-Null
+    $line = "[{0}] [{1}] {2}" -f $timestamp, $Level, $Message
+    $script:LogLines.Add($line) | Out-Null
+    Write-Host $line -ForegroundColor $Color
 }
 
 function Show-Banner {
     Write-Host ''
-    Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host ' Broadcom License Assessment Tool' -ForegroundColor Cyan
-    Write-Host (' ' + $script:AuthorLine) -ForegroundColor Gray
-    Write-Host (' Version ' + $script:ToolVersion) -ForegroundColor Gray
-    Write-Host '============================================================' -ForegroundColor DarkCyan
+    Write-Host '============================================================' -ForegroundColor Cyan
+    Write-Host $script:ToolName -ForegroundColor Cyan
+    Write-Host 'Developed by Juliano Cunha (GitHub: julianscunha)' -ForegroundColor Gray
+    Write-Host ("Version {0}" -f $script:Version) -ForegroundColor Gray
+    Write-Host '============================================================' -ForegroundColor Cyan
     Write-Host ''
 }
 
-function Test-IsAdministrator {
-    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+function Read-YesNo {
+    param([Parameter(Mandatory=$true)][string]$Prompt,[bool]$DefaultYes = $true)
+    $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
+    $answer = Read-Host "$Prompt $suffix"
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $DefaultYes }
+    return $answer -match '^(y|yes)$'
 }
 
+function Get-SafeFileName {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return 'UnnamedCustomer' }
+    $invalid = [System.IO.Path]::GetInvalidFileNameChars()
+    $chars = $Text.ToCharArray() | ForEach-Object { if ($invalid -contains $_) { '_' } else { $_ } }
+    $safe = -join $chars
+    $safe = $safe -replace '\s+', '_'
+    if ([string]::IsNullOrWhiteSpace($safe)) { return 'UnnamedCustomer' }
+    return $safe
+}
+
+function Ensure-Directory { param([string]$Path) if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null } }
+
 function Ensure-ExecutionPolicy {
-    $effective = Get-ExecutionPolicy -List
-    $machine = ($effective | Where-Object Scope -eq 'LocalMachine').ExecutionPolicy
-    $user = ($effective | Where-Object Scope -eq 'CurrentUser').ExecutionPolicy
-    $process = ($effective | Where-Object Scope -eq 'Process').ExecutionPolicy
-    Write-Log -Message ("Prereq OK - Execution policy: Process={0}; CurrentUser={1}; LocalMachine={2}" -f $process, $user, $machine) -Level 'OK'
-
-    $safePolicies = @('RemoteSigned','Unrestricted','Bypass')
-    if ($safePolicies -contains $process -or $safePolicies -contains $user -or $safePolicies -contains $machine) {
-        return
-    }
-
-    Write-Log -Message 'ExecutionPolicy may block script execution in this session.' -Level 'WARN'
-    if (Read-YesNo -Prompt 'Apply temporary ExecutionPolicy Bypass in Process scope for this session only?' -Default $true) {
-        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-        $script:SessionState.ProcessExecutionPolicyChanged = $true
-        Write-Log -Message 'Temporary Process-scope ExecutionPolicy set to Bypass.' -Level 'OK'
-    }
-    else {
-        throw 'ExecutionPolicy not adjusted. Script cannot continue safely.'
+    $policies = Get-ExecutionPolicy -List
+    $summary = ($policies | Where-Object { $_.Scope -in 'Process','CurrentUser','LocalMachine' } | ForEach-Object { '{0}={1}' -f $_.Scope,$_.ExecutionPolicy }) -join '; '
+    Write-Log "Prereq OK - Execution policy: $summary" 'OK' 'Green'
+    if ($policies.Process -eq 'Restricted') {
+        if (Read-YesNo -Prompt 'Process execution policy is Restricted. Apply temporary Bypass for this session?' -DefaultYes $true) {
+            Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+            $script:SessionTweaks.ExecutionPolicyBypassApplied = $true
+            Write-Log 'Applied temporary Process execution policy Bypass.' 'WARN' 'Yellow'
+        } else {
+            throw 'Execution policy blocks the current session.'
+        }
     }
 }
 
 function Ensure-PowerCLI {
-    $minimumVersion = [version]'13.3.0'
-    $installed = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
-
-    if (-not $installed -or $installed.Version -lt $minimumVersion) {
-        if (-not $installed) {
-            Write-Log -Message 'Prereq FAIL - VMware.PowerCLI module not installed.' -Level 'ERROR'
-        }
-        else {
-            Write-Log -Message ("Prereq FAIL - VMware.PowerCLI {0} found, but 13.3+ is required." -f $installed.Version) -Level 'ERROR'
-        }
-
-        if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for CurrentUser now?' -Default $true)) {
-            throw 'VMware PowerCLI is required. Run the script again after installation.'
-        }
-
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
-            if (-not $nugetProvider) {
-                Write-Log -Message 'NuGet provider not found. Installing it now.' -Level 'INFO'
-                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-            }
-
-            if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-                try {
-                    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-                    Write-Log -Message 'PSGallery marked as Trusted for module installation.' -Level 'INFO'
-                }
-                catch {
-                    Write-Log -Message ('Unable to mark PSGallery as Trusted automatically: ' + $_.Exception.Message) -Level 'WARN'
-                }
-            }
-
-            if (-not (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
-                throw 'PowerShellGet / Install-Module is not available in this session.'
-            }
-
-            Write-Log -Message 'Installing VMware.PowerCLI in CurrentUser scope. This can take a few minutes.' -Level 'INFO'
-            Write-Progress -Activity 'Installing VMware PowerCLI' -Status 'Preparing module installation' -PercentComplete 5
-            Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-            Write-Progress -Activity 'Installing VMware PowerCLI' -Status 'Installation completed' -PercentComplete 100
-            Start-Sleep -Milliseconds 300
-            Write-Progress -Activity 'Installing VMware PowerCLI' -Completed
-        }
-        catch {
-            Write-Progress -Activity 'Installing VMware PowerCLI' -Completed
-            Write-Log -Message ('Failed to install VMware PowerCLI automatically: ' + $_.Exception.Message) -Level 'ERROR'
-            throw 'PowerCLI installation failed. Re-run the script after resolving repository or internet access issues.'
-        }
-
-        $installed = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $installed -or $installed.Version -lt $minimumVersion) {
-            Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI was installed or updated, but a fresh session is required to load it reliably.'
-        }
+    $loaded = Get-Module -ListAvailable VMware.PowerCLI | Sort-Object Version -Descending | Select-Object -First 1
+    if ($loaded -and $loaded.Version -ge [version]'13.3.0') {
+        Write-Log ("Prereq OK - VMware.PowerCLI {0}" -f $loaded.Version) 'OK' 'Green'
+        return $loaded.Version
     }
+    Write-Log 'Prereq FAIL - VMware.PowerCLI 13.3+ not found.' 'ERROR' 'Red'
+    if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for CurrentUser now?' -DefaultYes $true)) { throw 'VMware.PowerCLI 13.3+ is required.' }
 
-    # Configure CEIP and deprecation warnings in a hidden child session before importing in the current session.
-    try {
-        $cmd = "try { $env:VMWARE_CEIP_DISABLE='True'; Import-Module VMware.VimAutomation.Core -ErrorAction Stop | Out-Null; Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP `$false -Confirm:`$false | Out-Null; Set-PowerCLIConfiguration -Scope User -DisplayDeprecationWarnings `$false -Confirm:`$false | Out-Null } catch { }"
-        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command', $cmd) -WindowStyle Hidden -PassThru -Wait
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
     }
-    catch { }
+    try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null } catch {}
 
-    $warningBak = $WarningPreference
-    $infoBak = $InformationPreference
-    $progressBak = $ProgressPreference
-    try {
-        $env:VMWARE_CEIP_DISABLE = 'True'
-        $WarningPreference = 'SilentlyContinue'
-        $InformationPreference = 'SilentlyContinue'
-        $ProgressPreference = 'SilentlyContinue'
-        Import-Module VMware.VimAutomation.Core -DisableNameChecking -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
-        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Fail -Confirm:$false | Out-Null
-    }
-    finally {
-        $WarningPreference = $warningBak
-        $InformationPreference = $infoBak
-        $ProgressPreference = $progressBak
-    }
+    $ProgressPreference = 'Continue'
+    Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Preparing installation' -PercentComplete 5
+    Install-Module -Name VMware.PowerCLI -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
+    Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Importing module' -PercentComplete 80
 
-    $loaded = Get-Module -Name 'VMware.VimAutomation.Core'
-    if (-not $loaded) {
-        Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI is installed, but the current session did not load VMware.VimAutomation.Core reliably.'
-    }
+    $env:VMWARE_CEIP_DISABLE = 'true'
+    $WarningPreference = 'SilentlyContinue'
+    $InformationPreference = 'SilentlyContinue'
+    Import-Module VMware.PowerCLI -DisableNameChecking -Scope Global -ErrorAction Stop | Out-Null
+    Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP $false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Fail -Confirm:$false | Out-Null
+    Write-Progress -Activity 'Installing VMware.PowerCLI' -Completed
 
-    Write-Log -Message ("Prereq OK - VMware.PowerCLI {0}" -f $installed.Version) -Level 'OK'
+    $loaded = Get-Module -ListAvailable VMware.PowerCLI | Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $loaded) { throw 'VMware.PowerCLI installation did not complete successfully.' }
+    Write-Log ("Prereq OK - VMware.PowerCLI {0}" -f $loaded.Version) 'OK' 'Green'
+    return $loaded.Version
 }
 
-function Configure-PowerCLI {
-    try {
-        $script:SessionState.PreviousPowerCLICertAction = (Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue).InvalidCertificateAction
-    } catch { }
-
-    if ($TrustInvalidCertificates) {
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
-        Write-Log -Message 'PowerCLI session configured to ignore invalid certificates.' -Level 'WARN'
-    }
-    else {
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Fail -Confirm:$false | Out-Null
-    }
+function Initialize-PowerCLIQuiet {
+    $env:VMWARE_CEIP_DISABLE = 'true'
+    $WarningPreference = 'SilentlyContinue'
+    $InformationPreference = 'SilentlyContinue'
+    Import-Module VMware.PowerCLI -DisableNameChecking -Scope Global -ErrorAction Stop | Out-Null
+    Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP $false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
+    Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Fail -Confirm:$false | Out-Null
 }
 
-function Connect-VIServerWithPrompt {
-    param(
-        [Parameter(Mandatory=$true)][string]$Server,
-        [Parameter(Mandatory=$true)][pscredential]$Credential
-    )
-
+function Connect-ToVIServer {
+    param([Parameter(Mandatory=$true)][string]$Server,[Parameter(Mandatory=$true)][pscredential]$Credential)
     try {
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
-        Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
-        return
-    }
-    catch {
+        if ($TrustInvalidCertificates) {
+            Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
+            $script:SessionTweaks.InvalidCertificateIgnoreApplied = $true
+        }
+        return Connect-VIServer -Server $Server -Credential $Credential -WarningAction SilentlyContinue -ErrorAction Stop
+    } catch {
         $msg = $_.Exception.Message
-        $fqid = $_.FullyQualifiedErrorId
-        $looksLikeCert = ($msg -match 'certificate' -or $msg -match 'SSL/TLS' -or $fqid -match 'Certificate')
-        if (-not $looksLikeCert) {
-            throw
+        if ($msg -match 'certificate|SSL|TLS|trust' -or $_.FullyQualifiedErrorId -match 'Certificate|ViSecurityNegotiationException') {
+            Write-Log "Certificate validation failed while connecting to $Server." 'WARN' 'Yellow'
+            if (Read-YesNo -Prompt 'Ignore invalid certificate for this PowerCLI session and retry connection?' -DefaultYes $true) {
+                Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
+                $script:SessionTweaks.InvalidCertificateIgnoreApplied = $true
+                Write-Log 'Invalid certificate handling set to Ignore for this session after user confirmation.' 'WARN' 'Yellow'
+                return Connect-VIServer -Server $Server -Credential $Credential -WarningAction SilentlyContinue -ErrorAction Stop
+            }
+            throw 'Connection aborted because certificate validation was not accepted.'
         }
-
-        Write-Log -Message ('Certificate validation failed while connecting to ' + $Server + '.') -Level 'WARN'
-        if (-not (Read-YesNo -Prompt 'Ignore invalid certificate for this PowerCLI session and retry connection?' -Default $true)) {
-            throw 'Connection aborted by user after certificate validation failure.'
-        }
-
-        Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
-        Write-Log -Message 'Invalid certificate handling set to Ignore for this session after user confirmation.' -Level 'WARN'
-
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
-        Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
+        throw
     }
 }
 
-function Get-EnvironmentVersionFlag {
-    param([Parameter(Mandatory=$true)]$Cluster)
-    $hosts = Get-VMHost -Location $Cluster | Select-Object -ExpandProperty Version
-    $requiresUpdatedMethod = $false
-    foreach ($hostVersion in $hosts) {
-        if ($hostVersion -match '^8\.0\.3' -or $hostVersion -match '^8\.0 U3') {
-            $requiresUpdatedMethod = $true
-        }
-    }
-    return $requiresUpdatedMethod
-}
+function Convert-BytesToTiB { param([double]$Bytes) if ($Bytes -le 0) { return 0 }; return [math]::Round($Bytes / 1TB, 2) }
 
 function Get-VsanRawCapacityTiB {
     param([Parameter(Mandatory=$true)]$Cluster)
-    $capacityTiB = 0
-    $method = 'Get-VsanSpaceUsage'
+    $totalBytes = 0.0
+    $clusterName = $Cluster.Name
     try {
-        $usage = Get-VsanSpaceUsage -Cluster $Cluster -ErrorAction Stop
-        if ($usage -and $usage.CapacityGB) {
-            $capacityTiB = [math]::Round(([double]$usage.CapacityGB / 1024), 2)
-            return [pscustomobject]@{ TiB = $capacityTiB; Method = $method; Notes = '' }
-        }
+        $spaceUsage = Get-VsanSpaceUsage -Cluster $Cluster -ErrorAction Stop
+        if ($spaceUsage -and $spaceUsage.CapacityGB) { return [math]::Round(([double]$spaceUsage.CapacityGB / 1024), 2) }
+    } catch {
+        Write-Log "Get-VsanSpaceUsage failed for cluster $clusterName. Falling back to vSAN disk inventory." 'WARN' 'Yellow'
     }
-    catch {
-        $method = 'ESXCLI fallback'
-    }
-
-    $sumMB = 0
-    $notes = 'Fallback method used. Capacity Tier disks summed via ESXCLI.'
-    foreach ($vmhost in Get-VMHost -Location $Cluster) {
-        $esxcli = Get-EsxCli -VMHost $vmhost -V2
-        $storageItems = $esxcli.vsan.storage.list.Invoke()
-        foreach ($item in $storageItems) {
-            if ($item.IsCapacityTier -eq $true) {
-                $deviceInfo = $esxcli.storage.core.device.list.Invoke(@{device=$item.Device})
-                if ($deviceInfo -and $deviceInfo.Size) {
-                    $sumMB += [double]$deviceInfo.Size
+    foreach ($vmHost in (Get-VMHost -Location $Cluster -ErrorAction Stop)) {
+        try {
+            $storageInfo = Get-VsanDisk -VMHost $vmHost -ErrorAction Stop
+            foreach ($disk in $storageInfo) {
+                if ($disk.IsCapacityFlash -or $disk.IsCapacityTier -or ($disk.DiskType -match 'capacity')) {
+                    if ($disk.Capacity) { $totalBytes += [double]$disk.Capacity }
+                    elseif ($disk.CapacityGB) { $totalBytes += ([double]$disk.CapacityGB * 1GB) }
                 }
             }
+        } catch {
+            Write-Log ("Could not inventory vSAN disks on host {0}: {1}" -f $vmHost.Name, $_.Exception.Message) 'WARN' 'Yellow'
         }
     }
-    if ($sumMB -gt 0) {
-        $capacityTiB = [math]::Round(($sumMB / 1024 / 1024), 2)
-    }
-    return [pscustomobject]@{ TiB = $capacityTiB; Method = $method; Notes = $notes }
+    return Convert-BytesToTiB -Bytes $totalBytes
 }
 
-function Get-LicenseAssignmentsSummary {
-    param([Parameter(Mandatory=$true)]$Server)
-    $items = @()
-    try {
-        $licenseManager = Get-View -Id 'LicenseManager-LicenseManager'
-        foreach ($lic in $licenseManager.Licenses) {
-            $properties = @{}
-            foreach ($pair in $lic.Properties) {
-                $properties[$pair.Key] = $pair.Value
-            }
-            $expiration = $null
-            if ($properties.ContainsKey('expirationDate')) {
-                [datetime]::TryParse($properties['expirationDate'], [ref]$expiration) | Out-Null
-            }
-            $status = 'Valid'
-            if ($expiration) {
-                if ($expiration -lt (Get-Date)) { $status = 'Expired' }
-                elseif ($expiration -le (Get-Date).AddDays(30)) { $status = 'Expiring<=30d' }
-                elseif ($expiration -le (Get-Date).AddDays(90)) { $status = 'Expiring<=90d' }
-            }
-            if ($properties.ContainsKey('editionKey') -and $properties['editionKey'] -match 'eval') {
-                $status = 'Evaluation'
-            }
-            $items += [pscustomobject]@{
-                Name = $lic.Name
-                LicenseKey = $lic.LicenseKey
-                CostUnit = $lic.CostUnit
-                Total = $lic.Total
-                Used = $lic.Used
-                ExpirationDate = $expiration
-                Status = $status
-                Server = $Server
-            }
+function Get-LicenseAssignments {
+    param([Parameter(Mandatory=$true)]$Server,[switch]$Enabled)
+    $result = [ordered]@{
+        AssignmentRows = @()
+        Summary = [ordered]@{
+            TotalLicenses = 0
+            Expired = 0
+            Expiring30 = 0
+            Expiring90 = 0
+            Evaluation = 0
+            UnlicensedObjects = 0
         }
     }
-    catch {
-        Write-Log -Message ('License inventory could not be fully collected: ' + $_.Exception.Message) -Level 'WARN'
+    if (-not $Enabled) { return $result }
+    try {
+        $licenseManager = Get-View -Id 'LicenseManager-licenseManager' -Server $Server -ErrorAction Stop
+        $licenses = @($licenseManager.Licenses)
+        $result.Summary.TotalLicenses = $licenses.Count
+        foreach ($lic in $licenses) {
+            $exp = $null; $edition = $null; $isEval = $false
+            if ($lic.Properties) {
+                foreach ($prop in $lic.Properties) {
+                    if ($prop.Key -match 'expirationDate|expiration') { $exp = $prop.Value }
+                    if ($prop.Key -match 'editionKey|productName') { $edition = $prop.Value }
+                    if ($prop.Key -match 'evaluation') { $isEval = $prop.Value -match 'true' }
+                }
+            }
+            $expDate = $null
+            if ($exp) { [void][datetime]::TryParse($exp, [ref]$expDate) }
+            if ($expDate) {
+                $days = ($expDate - (Get-Date)).TotalDays
+                if ($days -lt 0) { $result.Summary.Expired++ }
+                elseif ($days -le 30) { $result.Summary.Expiring30++ }
+                elseif ($days -le 90) { $result.Summary.Expiring90++ }
+            }
+            if ($isEval) { $result.Summary.Evaluation++ }
+
+            $result.AssignmentRows += [pscustomobject]@{
+                Server = $Server.Name; LicenseKey = $lic.LicenseKey; Name = $lic.Name; Edition = $edition
+                Total = $lic.Total; Used = $lic.Used; CostUnit = $lic.CostUnit
+                Expires = if ($expDate) { $expDate.ToString('yyyy-MM-dd') } else { '' }
+                Evaluation = $isEval
+            }
+        }
+    } catch {
+        Write-Log ("License inventory failed on server {0}: {1}" -f $Server.Name, $_.Exception.Message) 'WARN' 'Yellow'
     }
-    return $items
+    return $result
 }
 
 function New-ClusterAssessment {
-    param(
-        [Parameter(Mandatory=$true)]$Server,
-        [Parameter(Mandatory=$true)]$Cluster,
-        [Parameter(Mandatory=$true)][string]$DeploymentType,
-        [switch]$CollectLicenses
-    )
-
-    $vmhosts = Get-VMHost -Location $Cluster | Sort-Object Name
-    $hostRows = @()
-    $totalAdjustedCores = 0
-    foreach ($vmhost in $vmhosts) {
-        $cpuPackages = [int]$vmhost.NumCpu
-        $coresPerPackage = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
-        $actualCores = $cpuPackages * $coresPerPackage
-        $adjustedCores = [math]::Max($actualCores, (16 * $cpuPackages))
-        $includedVsanTiB = if ($DeploymentType -eq 'VCF') { $adjustedCores * 1.0 } else { $adjustedCores * 0.25 }
-        $totalAdjustedCores += $adjustedCores
-        $hostRows += [pscustomobject]@{
-            Cluster = $Cluster.Name
-            VMHost = $vmhost.Name
-            NumCpuSockets = $cpuPackages
-            NumCpuCoresPerSocket = $coresPerPackage
-            ActualCoreCount = $actualCores
-            FoundationLicenseCoreCount = $adjustedCores
-            IncludedVsanTiB = [math]::Round($includedVsanTiB,2)
-            HostVersion = $vmhost.Version
-        }
+    param([Parameter(Mandatory=$true)]$Server,[Parameter(Mandatory=$true)]$Cluster,[Parameter(Mandatory=$true)][string]$DeploymentModel)
+    $hostRows = New-Object System.Collections.Generic.List[object]
+    $clusterName = $Cluster.Name
+    $totalCoresRequired = 0
+    foreach ($vmHost in (Get-VMHost -Location $Cluster -ErrorAction Stop | Sort-Object Name)) {
+        $numSockets = [int]$vmHost.NumCpu
+        $numCoresPerSocket = [int]($vmHost.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($vmHost.NumCpu,1))
+        $adjustedCoresPerSocket = [math]::Max($numCoresPerSocket, 16)
+        $requiredCores = $numSockets * $adjustedCoresPerSocket
+        $totalCoresRequired += $requiredCores
+        $hostRows.Add([pscustomobject]@{
+            Server = $Server.Name; Cluster = $clusterName; VMHost = $vmHost.Name; CpuSockets = $numSockets
+            CoresPerSocketActual = $numCoresPerSocket; CoresPerSocketBillable = $adjustedCoresPerSocket
+            RequiredCores = $requiredCores; Version = $vmHost.Version; Build = $vmHost.Build
+        }) | Out-Null
     }
-
-    $vsanRaw = Get-VsanRawCapacityTiB -Cluster $Cluster
-    $includedClusterTiB = if ($DeploymentType -eq 'VCF') { $totalAdjustedCores * 1.0 } else { $totalAdjustedCores * 0.25 }
-    $requiredAddOnTiB = [math]::Max([math]::Ceiling($vsanRaw.TiB - [math]::Floor($includedClusterTiB)), 0)
-
-    $licenseData = @()
-    if ($CollectLicenses) {
-        $licenseData = Get-LicenseAssignmentsSummary -Server $Server
-    }
-
+    $entitlementTiB = if ($DeploymentModel -eq 'VCF') { [math]::Round($totalCoresRequired * 1.0, 2) } else { [math]::Round($totalCoresRequired * 0.25, 2) }
+    $rawVsanTiB = Get-VsanRawCapacityTiB -Cluster $Cluster
+    $requiredAddonTiB = [math]::Ceiling([math]::Max(($rawVsanTiB - $entitlementTiB), 0))
     return [pscustomobject]@{
-        Server = $Server
-        Cluster = $Cluster.Name
-        DeploymentType = $DeploymentType
-        Hosts = $hostRows
-        TotalRequiredComputeLicenses = $totalAdjustedCores
-        IncludedEntitlementTiB = [math]::Round($includedClusterTiB,2)
-        RawVsanTiB = [math]::Round($vsanRaw.TiB,2)
-        RequiredVsanAddOnTiB = [int]$requiredAddOnTiB
-        VsanMethod = $vsanRaw.Method
-        VsanNotes = $vsanRaw.Notes
-        RequiresUpdatedMethod = Get-EnvironmentVersionFlag -Cluster $Cluster
-        LicenseInventory = $licenseData
+        Server = $Server.Name; Cluster = $clusterName; DeploymentType = $DeploymentModel; HostCount = $hostRows.Count
+        RequiredComputeCores = $totalCoresRequired; IncludedEntitlementTiB = $entitlementTiB
+        RawVsanTiB = $rawVsanTiB; RequiredVsanAddonTiB = $requiredAddonTiB; HostRows = @($hostRows)
+    }
+}
+
+function Get-EnvironmentAssessment {
+    param([Parameter(Mandatory=$true)]$Server,[Parameter(Mandatory=$true)][string]$DeploymentModel)
+    $clusterAssessments = New-Object System.Collections.Generic.List[object]
+    foreach ($cluster in (Get-Cluster -Server $Server -ErrorAction Stop | Sort-Object Name)) {
+        Write-Log ("Assessing cluster {0} on {1}" -f $cluster.Name, $Server.Name) 'INFO' 'Cyan'
+        $clusterAssessments.Add((New-ClusterAssessment -Server $Server -Cluster $cluster -DeploymentModel $DeploymentModel)) | Out-Null
+    }
+    return [pscustomobject]@{
+        Server = $Server.Name; DeploymentType = $DeploymentModel; Clusters = @($clusterAssessments)
+        Summary = [pscustomobject]@{
+            ClusterCount = $clusterAssessments.Count
+            RequiredComputeCores = (@($clusterAssessments) | Measure-Object -Property RequiredComputeCores -Sum).Sum
+            IncludedEntitlementTiB = (@($clusterAssessments) | Measure-Object -Property IncludedEntitlementTiB -Sum).Sum
+            RawVsanTiB = (@($clusterAssessments) | Measure-Object -Property RawVsanTiB -Sum).Sum
+            RequiredVsanAddonTiB = (@($clusterAssessments) | Measure-Object -Property RequiredVsanAddonTiB -Sum).Sum
+        }
     }
 }
 
 function New-ExecutiveHtml {
-    param(
-        [Parameter(Mandatory=$true)]$Assessments,
-        [Parameter(Mandatory=$true)][string]$Path,
-        [bool]$Internal = $false,
-        [string]$LogoUrl = ''
-    )
+    param([Parameter(Mandatory=$true)]$Assessment,[Parameter(Mandatory=$true)][string]$Path,[Parameter(Mandatory=$true)][bool]$Internal)
+    $safeCustomer = if ($Assessment.CustomerName) { $Assessment.CustomerName } else { 'Not informed' }
+    $titleTag = if ($Internal) { 'GENERATED BY TRIPLE S CLOUD SOLUTIONS' } else { 'BROADCOM / VMWARE LICENSE ASSESSMENT' }
+    $accent = if ($Internal) { '#f28b25' } else { '#2563eb' }
 
-    $totalCores = ($Assessments | Measure-Object -Property TotalRequiredComputeLicenses -Sum).Sum
-    $totalIncluded = [math]::Round((($Assessments | Measure-Object -Property IncludedEntitlementTiB -Sum).Sum),2)
-    $totalRaw = [math]::Round((($Assessments | Measure-Object -Property RawVsanTiB -Sum).Sum),2)
-    $totalAddon = ($Assessments | Measure-Object -Property RequiredVsanAddOnTiB -Sum).Sum
-    $maxScale = [math]::Max([math]::Max([math]::Max([double]$totalRaw, [double]$totalIncluded), [double]$totalAddon), 1)
+    $summary = $Assessment.Summary
+    $maxBar = [math]::Max([math]::Max([double]$summary.RequiredComputeCores, [double]$summary.IncludedEntitlementTiB), [math]::Max([double]$summary.RawVsanTiB, [double]$summary.RequiredVsanAddonTiB))
+    if ($maxBar -le 0) { $maxBar = 1 }
 
-    $html = New-Object System.Collections.Generic.List[string]
-    $null = $html.Add('<!doctype html>')
-    $null = $html.Add('<html><head><meta charset="utf-8"><title>Broadcom License Assessment</title>')
-    $null = $html.Add('<style>')
-    $null = $html.Add('body{font-family:Segoe UI,Arial,sans-serif;background:#f5f7fb;color:#0f172a;margin:0;padding:24px;} @media (prefers-color-scheme: dark){body{background:#06111f;color:#e5e7eb}.card,.section{background:#0b1730;color:#e5e7eb;box-shadow:none} th{background:#0f1f3c;color:#cbd5e1} td{border-bottom:1px solid #22314f}.sub,.footer{color:#9ca3af}.track{background:#1e293b}}')
-    $null = $html.Add('.wrap{max-width:1200px;margin:0 auto;} .hero{background:#0b1220;color:#fff;border-radius:18px;padding:28px 32px;margin-bottom:22px;}')
-    $null = $html.Add('.hero h1{margin:0 0 10px;font-size:32px;} .hero p{margin:6px 0;color:#cbd5e1;} .eyebrow{letter-spacing:.1em;text-transform:uppercase;font-size:12px;color:#93c5fd;}')
-    $null = $html.Add('.logo-wrap{display:inline-block;background:rgba(255,255,255,.96);padding:10px 16px;border-radius:12px;margin-bottom:14px;} .logo{max-height:70px;max-width:280px;} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px;}')
-    $null = $html.Add('.card{background:#fff;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(15,23,42,.08);} .kpi{font-size:30px;font-weight:700;margin-top:8px;} .sub{color:#475569;font-size:13px;}')
-    $null = $html.Add('.section{background:#fff;border-radius:16px;padding:20px;box-shadow:0 10px 30px rgba(15,23,42,.08);margin-bottom:20px;} .section h2{margin:0 0 14px;font-size:22px;}')
-    $null = $html.Add('.bars{display:grid;gap:10px;} .barlabel{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;} .track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;} .fill{height:12px;border-radius:999px;}')
-    $null = $html.Add('table{width:100%;border-collapse:collapse;font-size:13px;} th,td{padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:left;} th{color:#334155;background:#f8fafc;}')
-    $null = $html.Add('.badge{display:inline-block;background:#eff6ff;color:#1d4ed8;padding:4px 8px;border-radius:999px;font-size:12px;margin-right:6px;} .warn{color:#92400e;background:#fef3c7;}')
-    $null = $html.Add('.footer{font-size:12px;color:#64748b;text-align:center;margin-top:18px;} .formula{font-family:Consolas,monospace;background:#0f172a;color:#e2e8f0;border-radius:12px;padding:12px;overflow:auto;}')
-    $null = $html.Add('@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr);}} @media(max-width:700px){.grid{grid-template-columns:1fr;}}')
-    $null = $html.Add('</style></head><body><div class="wrap">')
-    $null = $html.Add('<div class="hero">')
-    if ($Internal -and $LogoUrl) {
-        $null = $html.Add('<div class="logo-wrap"><img class="logo" src="' + (ConvertTo-SafeHtml $LogoUrl) + '" alt="Triple S Cloud Solutions logo"></div>')
-        $null = $html.Add('<div class="eyebrow">Generated for internal use</div>')
-    } else {
-        $null = $html.Add('<div class="eyebrow">Generated by Triple S Cloud Solutions</div>')
+    $clusterRows = foreach ($cluster in $Assessment.Environments.Clusters) {
+        $calcRule = if ($cluster.DeploymentType -eq 'VCF') { 'VCF includes 1.0 TiB per licensed core.' } else { 'VVF includes 0.25 TiB per licensed core.' }
+        "<tr><td>$($cluster.Server)</td><td>$($cluster.Cluster)</td><td>$($cluster.HostCount)</td><td>$($cluster.RequiredComputeCores)</td><td>$([math]::Round($cluster.IncludedEntitlementTiB,2))</td><td>$([math]::Round($cluster.RawVsanTiB,2))</td><td>$([math]::Round($cluster.RequiredVsanAddonTiB,0))</td><td>$calcRule</td></tr>"
+    } | Out-String
+
+    $licenseSummaryRows = foreach ($row in $Assessment.LicenseAssignments) {
+        "<tr><td>$($row.Server)</td><td>$($row.Name)</td><td>$($row.Edition)</td><td>$($row.Total)</td><td>$($row.Used)</td><td>$($row.CostUnit)</td><td>$($row.Expires)</td><td>$($row.Evaluation)</td></tr>"
+    } | Out-String
+
+    $logoBlock = ''
+    if ($Internal) {
+        $logoBlock = '<div class="logo-box"><img src="https://triples.com.br/wp-content/uploads/2022/11/cropped-logo-triples-1.png" alt="Triple S" /></div>'
     }
-    $null = $html.Add('<h1>Broadcom / VMware License Assessment</h1>')
-    $null = $html.Add('<p>Developed by Juliano Cunha (GitHub: julianscunha)</p>')
-    $null = $html.Add('<p>Customer / Company: ' + (ConvertTo-SafeHtml $script:SessionState.CompanyName) + '</p>')
-    $null = $html.Add('<p>Assessment date: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '</p>')
-    $null = $html.Add('</div>')
-    $null = $html.Add('<div class="grid">')
-    foreach ($pair in @(
-        @{T='Required compute';V=("{0} cores" -f $totalCores);S='Broadcom minimum 16 cores per CPU applied'},
-        @{T='Included vSAN';V=("{0} TiB" -f $totalIncluded);S='VCF = 1 TiB/core, VVF = 0.25 TiB/core'},
-        @{T='Measured raw vSAN';V=("{0} TiB" -f $totalRaw);S='Raw physical capacity claimed by vSAN'},
-        @{T='Required vSAN Add-on';V=("{0} TiB" -f $totalAddon);S='Rounded up when above entitlement'}
-    )) {
-        $null = $html.Add('<div class="card"><div class="sub">' + $pair.T + '</div><div class="kpi">' + $pair.V + '</div><div class="sub">' + $pair.S + '</div></div>')
-    }
-    $null = $html.Add('</div>')
-    $null = $html.Add('<div class="section"><h2>Current standard and formulas</h2>')
-    $null = $html.Add('<div class="formula">')
-    $null = $html.Add('Adjusted host cores = max(actual host cores, 16 x physical CPU count)<br>')
-    $null = $html.Add('Included vSAN entitlement = adjusted cores x 1.0 (VCF) or adjusted cores x 0.25 (VVF)<br>')
-    $null = $html.Add('Required vSAN Add-on = max(ceil(raw vSAN TiB - floor(included entitlement TiB)), 0)<br>')
-    $null = $html.Add('For vSphere / vSAN 8.0 U3+, Broadcom documents an updated claimed-capacity method.</div></div>')
-    $null = $html.Add('<div class="section"><h2>Consumption dashboard</h2><div class="bars">')
-    $barData = @(
-        @{N='Required compute (cores)'; V=[double]$totalCores; C='#2563eb'},
-        @{N='Included vSAN entitlement (TiB)'; V=[double]$totalIncluded; C='#059669'},
-        @{N='Measured raw vSAN (TiB)'; V=[double]$totalRaw; C='#7c3aed'},
-        @{N='Required vSAN Add-on (TiB)'; V=[double]$totalAddon; C='#ea580c'}
-    )
-    foreach ($b in $barData) {
-        $width = [math]::Round(($b.V / $maxScale) * 100, 2)
-        $null = $html.Add('<div><div class="barlabel"><span>' + $b.N + '</span><span>' + $b.V + '</span></div><div class="track"><div class="fill" style="width:' + $width + '%;background:' + $b.C + '"></div></div></div>')
-    }
-    $null = $html.Add('</div></div>')
-    $null = $html.Add('<div class="section"><h2>Detailed calculations by cluster</h2><table><thead><tr><th>Server</th><th>Cluster</th><th>Model</th><th>Required compute</th><th>Included vSAN</th><th>Raw vSAN</th><th>Required Add-on</th><th>Method</th></tr></thead><tbody>')
-    foreach ($a in $Assessments) {
-        $methodBadge = '<span class="badge">' + (ConvertTo-SafeHtml $a.VsanMethod) + '</span>'
-        if ($a.RequiresUpdatedMethod) { $methodBadge += '<span class="badge warn">8.0 U3+ path</span>' }
-        $null = $html.Add('<tr><td>' + (ConvertTo-SafeHtml $a.Server) + '</td><td>' + (ConvertTo-SafeHtml $a.Cluster) + '</td><td>' + (ConvertTo-SafeHtml $a.DeploymentType) + '</td><td>' + $a.TotalRequiredComputeLicenses + ' cores</td><td>' + $a.IncludedEntitlementTiB + ' TiB</td><td>' + $a.RawVsanTiB + ' TiB</td><td>' + $a.RequiredVsanAddOnTiB + ' TiB</td><td>' + $methodBadge + '</td></tr>')
-    }
-    $null = $html.Add('</tbody></table></div>')
-    $null = $html.Add('<div class="section"><h2>Host inventory excerpt</h2><table><thead><tr><th>Cluster</th><th>Host</th><th>CPU sockets</th><th>Cores per socket</th><th>Actual cores</th><th>Adjusted cores</th><th>Included vSAN</th><th>Version</th></tr></thead><tbody>')
-    foreach ($a in $Assessments) {
-        foreach ($h in $a.Hosts) {
-            $null = $html.Add('<tr><td>' + (ConvertTo-SafeHtml $h.Cluster) + '</td><td>' + (ConvertTo-SafeHtml $h.VMHost) + '</td><td>' + $h.NumCpuSockets + '</td><td>' + $h.NumCpuCoresPerSocket + '</td><td>' + $h.ActualCoreCount + '</td><td>' + $h.FoundationLicenseCoreCount + '</td><td>' + $h.IncludedVsanTiB + ' TiB</td><td>' + (ConvertTo-SafeHtml $h.HostVersion) + '</td></tr>')
-        }
-    }
-    $null = $html.Add('</tbody></table></div>')
-    $null = $html.Add('<div class="footer">This report is based on collected environment data and Broadcom licensing guidelines. Final commercial positioning should be validated by an authorized partner.</div>')
-    $null = $html.Add('</div></body></html>')
-    [IO.File]::WriteAllText($Path, ($html -join [Environment]::NewLine), [Text.Encoding]::UTF8)
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Broadcom License Assessment - $safeCustomer</title>
+<style>
+:root { --bg:#f4f7fb; --card:#ffffff; --text:#0f172a; --muted:#475569; --line:#dbe3ef; --header1:#f8fbff; --header2:#eef4ff; --accent:$accent; }
+@media (prefers-color-scheme: dark) { :root { --bg:#08111f; --card:#0f1b2d; --text:#f8fafc; --muted:#cbd5e1; --line:#20304b; --header1:#143052; --header2:#1e3f6d; --accent:#7dd3fc; } }
+body { font-family: Segoe UI, Arial, sans-serif; margin:0; background:var(--bg); color:var(--text); }
+.wrap { max-width:1180px; margin:24px auto; padding:0 18px; }
+.hero { background: linear-gradient(135deg, var(--header1), var(--header2)); border:1px solid var(--line); border-radius:22px; padding:36px; display:flex; gap:24px; align-items:center; box-shadow:0 8px 28px rgba(15,23,42,.08); }
+.logo-box { background:rgba(255,255,255,0.98); padding:10px 16px; border-radius:12px; min-width:180px; display:flex; align-items:center; justify-content:center; }
+.logo-box img { max-width:160px; height:auto; display:block; }
+.eyebrow { font-size:12px; font-weight:700; letter-spacing:.12em; color:var(--accent); margin-bottom:10px; }
+h1 { margin:0 0 10px 0; font-size:26px; line-height:1.2; }
+.sub { color:var(--muted); font-size:18px; margin:0 0 8px 0; }
+.small { color:var(--muted); font-size:14px; }
+.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:22px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 8px 28px rgba(15,23,42,.05); }
+.kpi-label { font-size:13px; color:var(--muted); margin-bottom:6px; }
+.kpi-value { font-size:30px; font-weight:700; }
+.section { margin-top:20px; }
+h2 { font-size:18px; margin:0 0 12px 0; }
+table { width:100%; border-collapse: collapse; }
+th,td { border-bottom:1px solid var(--line); padding:10px 8px; text-align:left; font-size:14px; vertical-align: top; }
+th { font-size:12px; color:var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.bar { height:12px; border-radius:999px; background:rgba(148,163,184,.25); overflow:hidden; margin-top:8px; }
+.bar > span { display:block; height:100%; background: linear-gradient(90deg, var(--accent), #22c55e); border-radius:999px; }
+.note { color:var(--muted); font-size:13px; }
+.two-col { display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
+.tag { display:inline-block; border-radius:999px; padding:4px 10px; border:1px solid var(--line); color:var(--muted); margin-right:6px; font-size:12px; }
+.footer { margin:18px 0 32px; color:var(--muted); font-size:12px; text-align:right; }
+@media (max-width: 980px) { .grid, .two-col { grid-template-columns: 1fr; } .hero { flex-direction:column; align-items:flex-start; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    $logoBlock
+    <div>
+      <div class="eyebrow">$titleTag</div>
+      <h1>Broadcom / VMware License Assessment</h1>
+      <div class="sub">Customer: $safeCustomer</div>
+      <div class="small">Generated on $($Assessment.GeneratedOn) | Tool version $($script:Version)</div>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="card"><div class="kpi-label">Required Compute Cores</div><div class="kpi-value">$($summary.RequiredComputeCores)</div></div>
+    <div class="card"><div class="kpi-label">Included vSAN Entitlement (TiB)</div><div class="kpi-value">$([math]::Round($summary.IncludedEntitlementTiB,2))</div></div>
+    <div class="card"><div class="kpi-label">Measured Raw vSAN (TiB)</div><div class="kpi-value">$([math]::Round($summary.RawVsanTiB,2))</div></div>
+    <div class="card"><div class="kpi-label">Required vSAN Add-on (TiB)</div><div class="kpi-value">$([math]::Round($summary.RequiredVsanAddonTiB,0))</div></div>
+  </div>
+  <div class="two-col section">
+    <div class="card">
+      <h2>Dashboard</h2>
+      <div class="kpi-label">Compute required</div><div class="bar"><span style="width:$([math]::Round(([double]$summary.RequiredComputeCores / $maxBar) * 100, 2))%"></span></div>
+      <div class="kpi-label">Included entitlement TiB</div><div class="bar"><span style="width:$([math]::Round(([double]$summary.IncludedEntitlementTiB / $maxBar) * 100, 2))%"></span></div>
+      <div class="kpi-label">Measured raw vSAN TiB</div><div class="bar"><span style="width:$([math]::Round(([double]$summary.RawVsanTiB / $maxBar) * 100, 2))%"></span></div>
+      <div class="kpi-label">Required vSAN Add-on TiB</div><div class="bar"><span style="width:$([math]::Round(([double]$summary.RequiredVsanAddonTiB / $maxBar) * 100, 2))%"></span></div>
+      <p class="note">Calculation standard: minimum 16 licensable cores per physical CPU. VCF includes 1.0 TiB raw vSAN per core. VVF includes 0.25 TiB raw vSAN per core. Additional vSAN Add-on = max(raw vSAN TiB - included entitlement TiB, 0).</p>
+    </div>
+    <div class="card">
+      <h2>Assessment Metadata</h2>
+      <p><span class="tag">Customer</span> $safeCustomer</p>
+      <p><span class="tag">Deployment type</span> $($Assessment.DeploymentType)</p>
+      <p><span class="tag">Environments</span> $($Assessment.EnvironmentCount)</p>
+      <p><span class="tag">Generated by</span> $($Assessment.GeneratedBy)</p>
+      <p><span class="tag">PowerCLI</span> $($Assessment.PowerCLIVersion)</p>
+      <p><span class="tag">Prereq status</span> OK</p>
+    </div>
+  </div>
+  <div class="card section">
+    <h2>Cluster Calculations</h2>
+    <table><thead><tr><th>Server</th><th>Cluster</th><th>Hosts</th><th>Required cores</th><th>Included TiB</th><th>Raw vSAN TiB</th><th>Required Add-on TiB</th><th>Applied rule</th></tr></thead><tbody>$clusterRows</tbody></table>
+  </div>
+  <div class="card section">
+    <h2>Current License Inventory</h2>
+    <table><thead><tr><th>Server</th><th>Name</th><th>Edition</th><th>Total</th><th>Used</th><th>Cost unit</th><th>Expires</th><th>Evaluation</th></tr></thead><tbody>$licenseSummaryRows</tbody></table>
+    <p class="note">This section is populated only when license collection is enabled and the vCenter exposes the corresponding metadata.</p>
+  </div>
+  <div class="footer">Generated by $($Assessment.GeneratedBy)</div>
+</div>
+</body>
+</html>
+"@
+    Set-Content -Path $Path -Value $html -Encoding UTF8
 }
 
-function Export-PdfIfPossible {
-    param([string]$HtmlPath)
-    if (-not $ExportPdf) { return }
-    $pdfPath = [IO.Path]::ChangeExtension($HtmlPath, '.pdf')
+function Export-PdfFromHtml {
+    param([Parameter(Mandatory=$true)][string]$HtmlPath,[Parameter(Mandatory=$true)][string]$PdfPath)
     try {
-        $word = New-Object -ComObject Word.Application
+        $word = New-Object -ComObject Word.Application -ErrorAction Stop
         $word.Visible = $false
         $doc = $word.Documents.Open($HtmlPath)
-        $doc.SaveAs([ref]$pdfPath, [ref]17)
+        $wdFormatPDF = 17
+        $doc.SaveAs([ref]$PdfPath, [ref]$wdFormatPDF)
         $doc.Close()
         $word.Quit()
-        Write-Log -Message ('PDF exported to ' + $pdfPath) -Level 'OK'
+        Write-Log "PDF exported with Microsoft Word: $PdfPath" 'OK' 'Green'
+        return $true
+    } catch {}
+    $edgePath = "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe"
+    if (-not (Test-Path $edgePath)) { $edgePath = "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe" }
+    if (Test-Path $edgePath) {
+        try {
+            $uri = 'file:///' + ($HtmlPath -replace '\','/')
+            & $edgePath --headless --disable-gpu --print-to-pdf="$PdfPath" "$uri" | Out-Null
+            if (Test-Path $PdfPath) { Write-Log "PDF exported with Microsoft Edge headless: $PdfPath" 'OK' 'Green'; return $true }
+        } catch {}
     }
-    catch {
-        Write-Log -Message 'PDF export skipped. Microsoft Word COM automation is unavailable in this session.' -Level 'WARN'
+    $chromePath = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+    if (Test-Path $chromePath) {
+        try {
+            $uri = 'file:///' + ($HtmlPath -replace '\','/')
+            & $chromePath --headless --disable-gpu --print-to-pdf="$PdfPath" "$uri" | Out-Null
+            if (Test-Path $PdfPath) { Write-Log "PDF exported with Google Chrome headless: $PdfPath" 'OK' 'Green'; return $true }
+        } catch {}
     }
+    $wk = Get-Command wkhtmltopdf -ErrorAction SilentlyContinue
+    if ($wk) {
+        try {
+            & $wk.Source $HtmlPath $PdfPath | Out-Null
+            if (Test-Path $PdfPath) { Write-Log "PDF exported with wkhtmltopdf: $PdfPath" 'OK' 'Green'; return $true }
+        } catch {}
+    }
+    Write-Log 'PDF export skipped. Word COM, Edge/Chrome headless, and wkhtmltopdf were unavailable in this session.' 'WARN' 'Yellow'
+    return $false
 }
 
-function Restore-SessionChanges {
-    try {
-        if ($null -ne $script:SessionState.PreviousPowerCLICertAction -and $script:SessionState.PreviousPowerCLICertAction -ne '') {
-            Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction $script:SessionState.PreviousPowerCLICertAction -Confirm:$false | Out-Null
-        }
-    } catch { }
-    if ($script:SessionState.ProcessExecutionPolicyChanged) {
-        try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Undefined -Force } catch { }
-    }
-    try {
-        if ($DisconnectWhenDone) {
-            Get-VIServer -ErrorAction SilentlyContinue | Disconnect-VIServer -Confirm:$false | Out-Null
-            Write-Log -Message 'Disconnected from all VIServers.' -Level 'OK'
-        }
-    } catch { }
+function New-OutputBundle {
+    param([Parameter(Mandatory=$true)]$Assessment,[switch]$Internal)
+    Ensure-Directory -Path $script:OutputRoot
+    $safeCustomer = Get-SafeFileName -Text $Assessment.CustomerName
+    $prefix = "$safeCustomer-Broadcom-License-Assessment"
+    $jsonPath = Join-Path $script:OutputRoot "$prefix.json"
+    $csvPath = Join-Path $script:OutputRoot "$prefix-clusters.csv"
+    $htmlPath = Join-Path $script:OutputRoot "$prefix.html"
+    $pdfPath = Join-Path $script:OutputRoot "$prefix.pdf"
+    $logPath = Join-Path $script:OutputRoot "$prefix.log"
+    $Assessment | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding UTF8
+    $Assessment.Environments.Clusters | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+    New-ExecutiveHtml -Assessment $Assessment -Path $htmlPath -Internal:$Internal
+    $script:LogLines | Set-Content -Path $logPath -Encoding UTF8
+    if ($ExportPdf) { [void](Export-PdfFromHtml -HtmlPath $htmlPath -PdfPath $pdfPath) }
+    return [pscustomobject]@{ Json = $jsonPath; Csv = $csvPath; Html = $htmlPath; Pdf = if (Test-Path $pdfPath) { $pdfPath } else { '' }; Log = $logPath }
 }
 
-function Start-Assessment {
-    New-OutputFolder
-    Show-Banner
-    Write-Log -Message 'Starting assessment.'
-    Write-Log -Message ("Prereq OK - PowerShell version: {0}" -f $PSVersionTable.PSVersion) -Level 'OK'
-    if (Test-IsAdministrator) { Write-Log -Message 'Prereq OK - Run as Administrator: Elevated session' -Level 'OK' }
-    else { Write-Log -Message 'Prereq WARN - Script is not elevated. Some installation tasks may fail.' -Level 'WARN' }
-
-    Ensure-ExecutionPolicy
-    Ensure-PowerCLI
-    Configure-PowerCLI
-
-    $companyName = Read-Host 'Customer / Company name for the report'
-    if ([string]::IsNullOrWhiteSpace($companyName)) { $companyName = 'Not informed' }
-    $script:SessionState.CompanyName = $companyName
-
-    $results = New-Object System.Collections.Generic.List[object]
-    do {
-        $server = Read-Host 'Enter vCenter Server / ESXi endpoint'
-        if ([string]::IsNullOrWhiteSpace($server)) { throw 'Server cannot be empty.' }
-        $deployment = Read-Host ('Deployment type for this environment [VVF/VCF] (default ' + $DefaultDeploymentType + ')')
-        if ([string]::IsNullOrWhiteSpace($deployment)) { $deployment = $DefaultDeploymentType }
-        $deployment = $deployment.ToUpperInvariant()
-        if ($deployment -notin @('VVF','VCF')) { throw 'Deployment type must be VVF or VCF.' }
-
-        $credential = Get-Credential -Message ('Credentials for ' + $server)
-        Connect-VIServerWithPrompt -Server $server -Credential $credential
-
-        $clusters = Get-Cluster | Sort-Object Name
-        if (-not $clusters) { throw 'No clusters found in the connected environment.' }
-        foreach ($cluster in $clusters) {
-            Write-Log -Message ('Assessing cluster ' + $cluster.Name + ' on ' + $server)
-            $results.Add((New-ClusterAssessment -Server $server -Cluster $cluster -DeploymentType $deployment -CollectLicenses:$CollectLicenseAssignments))
-        }
-    } while (Read-YesNo -Prompt 'Assess another environment in the same run?' -Default $false)
-
-    $safeCompany = ($script:SessionState.CompanyName -replace '[^A-Za-z0-9._-]+','-').Trim('-')
-    if ([string]::IsNullOrWhiteSpace($safeCompany)) { $safeCompany = 'customer' }
-    $jsonPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.json')
-    $csvPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.csv')
-    $htmlPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.html')
-
-    $results | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding UTF8
-    $results | Select-Object Server,Cluster,DeploymentType,TotalRequiredComputeLicenses,IncludedEntitlementTiB,RawVsanTiB,RequiredVsanAddOnTiB,VsanMethod,RequiresUpdatedMethod | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-    New-ExecutiveHtml -Assessments $results -Path $htmlPath -Internal:$false
-    Export-PdfIfPossible -HtmlPath $htmlPath
-
-    $totalCores = ($results | Measure-Object -Property TotalRequiredComputeLicenses -Sum).Sum
-    $totalAddon = ($results | Measure-Object -Property RequiredVsanAddOnTiB -Sum).Sum
-    Write-Log -Message ('Summary: compute=' + $totalCores + ' cores; vSAN Add-on=' + $totalAddon + ' TiB') -Level 'OK'
-    Write-Log -Message ('Artifacts generated in ' + (Resolve-Path $OutputFolder).Path) -Level 'OK'
+function Restore-Session {
+    try { if ($DisconnectWhenDone -and $script:ConnectedServers.Count -gt 0) { Disconnect-VIServer -Server $script:ConnectedServers -Confirm:$false | Out-Null } } catch {}
+    try { $WarningPreference = $script:OriginalPreferences.WarningPreference; $InformationPreference = $script:OriginalPreferences.InformationPreference; $ProgressPreference = $script:OriginalPreferences.ProgressPreference } catch {}
 }
+
+Show-Banner
+Write-Log 'Starting assessment.' 'INFO' 'Cyan'
+Write-Log ("Prereq OK - PowerShell version: {0}" -f $PSVersionTable.PSVersion.ToString()) 'OK' 'Green'
+$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+Write-Log ("Prereq OK - Run as Administrator: {0}" -f ($(if ($isElevated) { 'Elevated session' } else { 'Standard session' }))) 'OK' 'Green'
+
+Ensure-ExecutionPolicy
+[void](Ensure-PowerCLI)
+Initialize-PowerCLIQuiet
+
+if ([string]::IsNullOrWhiteSpace($CustomerName)) {
+    $CustomerName = Read-Host 'Customer / Company name'
+    if ([string]::IsNullOrWhiteSpace($CustomerName)) { $CustomerName = 'Not informed' }
+}
+
+$environments = New-Object System.Collections.Generic.List[object]
+$allLicenseRows = New-Object System.Collections.Generic.List[object]
 
 try {
-    Start-Assessment
+    do {
+        $serverName = Read-Host 'Enter vCenter Server / ESXi endpoint'
+        if ([string]::IsNullOrWhiteSpace($serverName)) { throw 'Server / endpoint cannot be empty.' }
+        $envDeployment = Read-Host ("Deployment type for this environment [VVF/VCF] (default {0})" -f $DeploymentType)
+        if ([string]::IsNullOrWhiteSpace($envDeployment)) { $envDeployment = $DeploymentType }
+        $envDeployment = $envDeployment.ToUpperInvariant()
+        if ($envDeployment -notin @('VVF','VCF')) { throw 'Deployment type must be VVF or VCF.' }
+        $cred = Get-Credential -Message ("Enter credentials for {0}" -f $serverName)
+        $server = Connect-ToVIServer -Server $serverName -Credential $cred
+        $script:ConnectedServers.Add($server) | Out-Null
+        Write-Log ("Connected to {0}" -f $server.Name) 'OK' 'Green'
+        $environmentAssessment = Get-EnvironmentAssessment -Server $server -DeploymentModel $envDeployment
+        $environments.Add($environmentAssessment) | Out-Null
+        $licenseInventory = Get-LicenseAssignments -Server $server -Enabled:$CollectLicenseAssignments
+        foreach ($row in $licenseInventory.AssignmentRows) { $allLicenseRows.Add($row) | Out-Null }
+        $more = Read-YesNo -Prompt 'Assess another environment in the same run?' -DefaultYes $false
+    } while ($more)
+
+    $flatClusters = @($environments | ForEach-Object { $_.Clusters } | ForEach-Object { $_ })
+    $summary = [pscustomobject]@{
+        RequiredComputeCores = (@($flatClusters) | Measure-Object -Property RequiredComputeCores -Sum).Sum
+        IncludedEntitlementTiB = (@($flatClusters) | Measure-Object -Property IncludedEntitlementTiB -Sum).Sum
+        RawVsanTiB = (@($flatClusters) | Measure-Object -Property RawVsanTiB -Sum).Sum
+        RequiredVsanAddonTiB = (@($flatClusters) | Measure-Object -Property RequiredVsanAddonTiB -Sum).Sum
+    }
+    $assessment = [pscustomobject]@{
+        CustomerName = $CustomerName
+        GeneratedOn = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        GeneratedBy = 'Juliano Cunha'
+        EnvironmentCount = $environments.Count
+        DeploymentType = if ($environments.Count -eq 1) { $environments[0].DeploymentType } else { 'Mixed' }
+        PowerCLIVersion = (Get-Module VMware.PowerCLI | Select-Object -First 1).Version.ToString()
+        Summary = $summary
+        Environments = [pscustomobject]@{ Servers = @($environments); Clusters = $flatClusters }
+        LicenseAssignments = @($allLicenseRows)
+        SessionTweaks = $script:SessionTweaks
+    }
+    $bundle = New-OutputBundle -Assessment $assessment -Internal:$false
+    Write-Host ''
+    Write-Host 'Summary:' -ForegroundColor Cyan
+    Write-Host ("  Customer:              {0}" -f $CustomerName)
+    Write-Host ("  Required compute:      {0} cores" -f $summary.RequiredComputeCores)
+    Write-Host ("  Included entitlement:  {0} TiB" -f ([math]::Round($summary.IncludedEntitlementTiB,2)))
+    Write-Host ("  Raw vSAN measured:     {0} TiB" -f ([math]::Round($summary.RawVsanTiB,2)))
+    Write-Host ("  Required vSAN add-on:  {0} TiB" -f ([math]::Round($summary.RequiredVsanAddonTiB,0)))
+    Write-Host ''
+    Write-Host 'Exported files:' -ForegroundColor Cyan
+    Write-Host ("  HTML: {0}" -f $bundle.Html)
+    if ($bundle.Pdf) { Write-Host ("  PDF:  {0}" -f $bundle.Pdf) }
+    Write-Host ("  JSON: {0}" -f $bundle.Json)
+    Write-Host ("  CSV:  {0}" -f $bundle.Csv)
+    Write-Host ("  LOG:  {0}" -f $bundle.Log)
 }
-catch {
-    Write-Log -Message $_.Exception.Message -Level 'ERROR'
-    throw
-}
-finally {
-    Restore-SessionChanges
-}
+finally { Restore-Session }
