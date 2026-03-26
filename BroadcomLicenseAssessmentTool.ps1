@@ -554,9 +554,9 @@ th{font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:.06em}
 
   <div class="card">
     <h2>Visual Overview</h2>
-    <div class="small"><strong>Risk Score</strong> — $($risk.Score)/100 ($($risk.Level))</div>
+    <div class="small"><strong>Risk Score</strong> - $($risk.Score)/100 ($($risk.Level))</div>
     <div class="bar-bg" style="margin-top:8px"><div class="bar-fill-red" style="width:${riskBar}%"></div></div>
-    <div class="small" style="margin-top:16px"><strong>Raw vSAN vs Included Entitlement</strong> — ${rawRatio}%</div>
+    <div class="small" style="margin-top:16px"><strong>Raw vSAN vs Included Entitlement</strong> - ${rawRatio}%</div>
     <div class="bar-bg" style="margin-top:8px"><div class="bar-fill-amber" style="width:${rawRatio}%"></div></div>
     <div class="small" style="margin-top:16px"><strong>Compute licensing footprint</strong></div>
     <div class="bar-bg" style="margin-top:8px"><div class="bar-fill-blue" style="width:100%"></div></div>
@@ -587,7 +587,7 @@ th{font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:.06em}
 </div>
 </div></body></html>
 "@
-    Set-Content -Path $Path -Value $html -Encoding UTF8
+    [System.IO.File]::WriteAllText($Path, $html, [System.Text.Encoding]::UTF8)
 }
 
 function New-OutputBundle {
@@ -607,11 +607,14 @@ function New-OutputBundle {
     if ($ExportPdf) { [void](Export-PdfFromHtml -HtmlPath $htmlPath -PdfPath $pdfPath) }
     $script:LogLines | Set-Content -Path $logPath -Encoding UTF8
 
+    $pdfResult = ''
+    if (Test-Path $pdfPath) { $pdfResult = $pdfPath }
+
     return [pscustomobject]@{
         Json = $jsonPath
         Csv  = $csvPath
         Html = $htmlPath
-        Pdf  = (if (Test-Path $pdfPath) { $pdfPath } else { '' })
+        Pdf  = $pdfResult
         Log  = $logPath
     }
 }

@@ -86,3 +86,5 @@ It does **not** claim authoritative feature detection for products not directly 
 
 - `EXAMPLE-OUTPUT.html`
 - `EXAMPLE-OUTPUT.md`
+- `EXAMPLE-OUTPUT-Internal.html`
+- `EXAMPLE-OUTPUT-Internal.md`
