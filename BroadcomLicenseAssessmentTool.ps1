@@ -370,25 +370,25 @@ function New-ClusterAssessment {
         [switch]$CollectLicenses
     )
 
-    $hosts = Get-VMHost -Location $Cluster | Sort-Object Name
+    $vmhosts = Get-VMHost -Location $Cluster | Sort-Object Name
     $hostRows = @()
     $totalAdjustedCores = 0
-    foreach ($host in $hosts) {
-        $cpuPackages = [int]$host.NumCpu
-        $coresPerPackage = [int]$host.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
+    foreach ($vmhost in $vmhosts) {
+        $cpuPackages = [int]$vmhost.NumCpu
+        $coresPerPackage = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
         $actualCores = $cpuPackages * $coresPerPackage
         $adjustedCores = [math]::Max($actualCores, (16 * $cpuPackages))
         $includedVsanTiB = if ($DeploymentType -eq 'VCF') { $adjustedCores * 1.0 } else { $adjustedCores * 0.25 }
         $totalAdjustedCores += $adjustedCores
         $hostRows += [pscustomobject]@{
             Cluster = $Cluster.Name
-            VMHost = $host.Name
+            VMHost = $vmhost.Name
             NumCpuSockets = $cpuPackages
             NumCpuCoresPerSocket = $coresPerPackage
             ActualCoreCount = $actualCores
             FoundationLicenseCoreCount = $adjustedCores
             IncludedVsanTiB = [math]::Round($includedVsanTiB,2)
-            HostVersion = $host.Version
+            HostVersion = $vmhost.Version
         }
     }
 
