@@ -29,6 +29,7 @@ $script:LogPath = Join-Path -Path $OutputFolder -ChildPath 'broadcom-assessment.
 $script:SessionState = [ordered]@{
     ProcessExecutionPolicyChanged = $false
     PreviousPowerCLICertAction = $null
+    CompanyName = ''
 }
 
 function Write-Log {
@@ -142,75 +143,134 @@ function Ensure-ExecutionPolicy {
 function Ensure-PowerCLI {
     $minimumVersion = [version]'13.3.0'
     $installed = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
-    if ($installed -and $installed.Version -ge $minimumVersion) {
-        Import-Module VMware.PowerCLI -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 6>$null | Out-Null
-        Write-Log -Message ("Prereq OK - VMware.PowerCLI {0}" -f $installed.Version) -Level 'OK'
-        return
-    }
 
-    if (-not $installed) {
-        Write-Log -Message 'Prereq FAIL - VMware.PowerCLI module not installed.' -Level 'ERROR'
-    }
-    else {
-        Write-Log -Message ("Prereq FAIL - VMware.PowerCLI {0} found, but 13.3+ is required." -f $installed.Version) -Level 'ERROR'
-    }
-
-    if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for CurrentUser now?' -Default $true)) {
-        throw 'VMware PowerCLI is required. Run the script again after installation.'
-    }
-
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-        $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
-        if (-not $nugetProvider) {
-            Write-Log -Message 'NuGet provider not found. Installing it now.' -Level 'INFO'
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+    if (-not $installed -or $installed.Version -lt $minimumVersion) {
+        if (-not $installed) {
+            Write-Log -Message 'Prereq FAIL - VMware.PowerCLI module not installed.' -Level 'ERROR'
+        }
+        else {
+            Write-Log -Message ("Prereq FAIL - VMware.PowerCLI {0} found, but 13.3+ is required." -f $installed.Version) -Level 'ERROR'
         }
 
-        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            try {
-                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-                Write-Log -Message 'PSGallery marked as Trusted for module installation.' -Level 'INFO'
-            }
-            catch {
-                Write-Log -Message ('Unable to mark PSGallery as Trusted automatically: ' + $_.Exception.Message) -Level 'WARN'
-            }
+        if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for CurrentUser now?' -Default $true)) {
+            throw 'VMware PowerCLI is required. Run the script again after installation.'
         }
-
-        if (-not (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
-            throw 'PowerShellGet / Install-Module is not available in this session.'
-        }
-
-        Write-Log -Message 'Installing VMware.PowerCLI in CurrentUser scope. This can take a few minutes.' -Level 'INFO'
-        Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
 
         try {
-            Import-Module VMware.PowerCLI -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 6>$null | Out-Null -WarningAction SilentlyContinue 3>$null 4>$null 6>$null | Out-Null
-            $installedNow = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
-            $ver = if ($installedNow) { $installedNow.Version.ToString() } else { 'installed' }
-            Write-Log -Message ('VMware PowerCLI installed and imported successfully. Version: ' + $ver) -Level 'OK'
-            return
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
+            if (-not $nugetProvider) {
+                Write-Log -Message 'NuGet provider not found. Installing it now.' -Level 'INFO'
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+            }
+
+            if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+                try {
+                    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+                    Write-Log -Message 'PSGallery marked as Trusted for module installation.' -Level 'INFO'
+                }
+                catch {
+                    Write-Log -Message ('Unable to mark PSGallery as Trusted automatically: ' + $_.Exception.Message) -Level 'WARN'
+                }
+            }
+
+            if (-not (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
+                throw 'PowerShellGet / Install-Module is not available in this session.'
+            }
+
+            Write-Log -Message 'Installing VMware.PowerCLI in CurrentUser scope. This can take a few minutes.' -Level 'INFO'
+            Write-Progress -Activity 'Installing VMware PowerCLI' -Status 'Preparing module installation' -PercentComplete 5
+            Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            Write-Progress -Activity 'Installing VMware PowerCLI' -Status 'Installation completed' -PercentComplete 100
+            Start-Sleep -Milliseconds 300
+            Write-Progress -Activity 'Installing VMware PowerCLI' -Completed
         }
         catch {
-            Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI was installed, but the current session did not refresh the module path automatically.'
+            Write-Progress -Activity 'Installing VMware PowerCLI' -Completed
+            Write-Log -Message ('Failed to install VMware PowerCLI automatically: ' + $_.Exception.Message) -Level 'ERROR'
+            throw 'PowerCLI installation failed. Re-run the script after resolving repository or internet access issues.'
+        }
+
+        $installed = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $installed -or $installed.Version -lt $minimumVersion) {
+            Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI was installed or updated, but a fresh session is required to load it reliably.'
         }
     }
-    catch {
-        Write-Log -Message ('Failed to install VMware PowerCLI automatically: ' + $_.Exception.Message) -Level 'ERROR'
-        throw 'PowerCLI installation failed. Re-run the script after resolving repository or internet access issues.'
+
+    # Configure CEIP and deprecation warnings in a hidden child session before importing in the current session.
+    try {
+        $cmd = "try { Import-Module VMware.VimAutomation.Core -ErrorAction Stop | Out-Null; Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP `$false -Confirm:`$false | Out-Null; Set-PowerCLIConfiguration -Scope User -DisplayDeprecationWarnings `$false -Confirm:`$false | Out-Null } catch { }"
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command', $cmd) -WindowStyle Hidden -PassThru -Wait
     }
+    catch { }
+
+    $warningBak = $WarningPreference
+    $infoBak = $InformationPreference
+    $progressBak = $ProgressPreference
+    try {
+        $WarningPreference = 'SilentlyContinue'
+        $InformationPreference = 'SilentlyContinue'
+        $ProgressPreference = 'SilentlyContinue'
+        Import-Module VMware.VimAutomation.Core -DisableNameChecking -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
+    }
+    finally {
+        $WarningPreference = $warningBak
+        $InformationPreference = $infoBak
+        $ProgressPreference = $progressBak
+    }
+
+    $loaded = Get-Module -Name 'VMware.VimAutomation.Core'
+    if (-not $loaded) {
+        Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI is installed, but the current session did not load VMware.VimAutomation.Core reliably.'
+    }
+
+    Write-Log -Message ("Prereq OK - VMware.PowerCLI {0}" -f $installed.Version) -Level 'OK'
 }
 
 function Configure-PowerCLI {
+    try {
+        $script:SessionState.PreviousPowerCLICertAction = (Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue).InvalidCertificateAction
+    } catch { }
+
     if ($TrustInvalidCertificates) {
-        try {
-            $script:SessionState.PreviousPowerCLICertAction = (Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue).InvalidCertificateAction
-        } catch { }
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
         Write-Log -Message 'PowerCLI session configured to ignore invalid certificates.' -Level 'WARN'
-    } else {
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -Confirm:$false | Out-Null
+    }
+    else {
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Prompt -Confirm:$false | Out-Null
+    }
+}
+
+function Connect-VIServerWithPrompt {
+    param(
+        [Parameter(Mandatory=$true)][string]$Server,
+        [Parameter(Mandatory=$true)][pscredential]$Credential
+    )
+
+    try {
+        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+        Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
+        return
+    }
+    catch {
+        $msg = $_.Exception.Message
+        $fqid = $_.FullyQualifiedErrorId
+        $looksLikeCert = ($msg -match 'certificate' -or $msg -match 'SSL/TLS' -or $fqid -match 'Certificate')
+        if (-not $looksLikeCert) {
+            throw
+        }
+
+        Write-Log -Message ('Certificate validation failed while connecting to ' + $Server + '.') -Level 'WARN'
+        if (-not (Read-YesNo -Prompt 'Ignore invalid certificate for this PowerCLI session and retry connection?' -Default $true)) {
+            throw 'Connection aborted by user after certificate validation failure.'
+        }
+
+        Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
+        Write-Log -Message 'Invalid certificate handling set to Ignore for this session after user confirmation.' -Level 'WARN'
+
+        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+        Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
     }
 }
 
@@ -243,8 +303,8 @@ function Get-VsanRawCapacityTiB {
 
     $sumMB = 0
     $notes = 'Fallback method used. Capacity Tier disks summed via ESXCLI.'
-    foreach ($vmhost in Get-VMHost -Location $Cluster) {
-        $esxcli = Get-EsxCli -VMHost $vmhost -V2
+    foreach ($host in Get-VMHost -Location $Cluster) {
+        $esxcli = Get-EsxCli -VMHost $host -V2
         $storageItems = $esxcli.vsan.storage.list.Invoke()
         foreach ($item in $storageItems) {
             if ($item.IsCapacityTier -eq $true) {
@@ -313,22 +373,22 @@ function New-ClusterAssessment {
     $hosts = Get-VMHost -Location $Cluster | Sort-Object Name
     $hostRows = @()
     $totalAdjustedCores = 0
-    foreach ($vmhost in $hosts) {
-        $cpuPackages = [int]$vmhost.NumCpu
-        $coresPerPackage = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
+    foreach ($host in $hosts) {
+        $cpuPackages = [int]$host.NumCpu
+        $coresPerPackage = [int]$host.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
         $actualCores = $cpuPackages * $coresPerPackage
         $adjustedCores = [math]::Max($actualCores, (16 * $cpuPackages))
         $includedVsanTiB = if ($DeploymentType -eq 'VCF') { $adjustedCores * 1.0 } else { $adjustedCores * 0.25 }
         $totalAdjustedCores += $adjustedCores
         $hostRows += [pscustomobject]@{
             Cluster = $Cluster.Name
-            VMHost = $vmhost.Name
+            VMHost = $host.Name
             NumCpuSockets = $cpuPackages
             NumCpuCoresPerSocket = $coresPerPackage
             ActualCoreCount = $actualCores
             FoundationLicenseCoreCount = $adjustedCores
             IncludedVsanTiB = [math]::Round($includedVsanTiB,2)
-            HostVersion = $vmhost.Version
+            HostVersion = $host.Version
         }
     }
 
@@ -369,16 +429,16 @@ function New-ExecutiveHtml {
     $totalIncluded = [math]::Round((($Assessments | Measure-Object -Property IncludedEntitlementTiB -Sum).Sum),2)
     $totalRaw = [math]::Round((($Assessments | Measure-Object -Property RawVsanTiB -Sum).Sum),2)
     $totalAddon = ($Assessments | Measure-Object -Property RequiredVsanAddOnTiB -Sum).Sum
-    $maxScale = [math]::Max([double]$totalRaw, [math]::Max([double]$totalIncluded, [math]::Max([double]$totalAddon, [math]::Max([double]$totalCores, 1.0))))
+    $maxScale = [math]::Max([math]::Max([math]::Max([double]$totalRaw, [double]$totalIncluded), [double]$totalAddon), 1)
 
     $html = New-Object System.Collections.Generic.List[string]
     $null = $html.Add('<!doctype html>')
     $null = $html.Add('<html><head><meta charset="utf-8"><title>Broadcom License Assessment</title>')
     $null = $html.Add('<style>')
-    $null = $html.Add('body{font-family:Segoe UI,Arial,sans-serif;background:#f5f7fb;color:#0f172a;margin:0;padding:24px;}')
+    $null = $html.Add('body{font-family:Segoe UI,Arial,sans-serif;background:#f5f7fb;color:#0f172a;margin:0;padding:24px;} @media (prefers-color-scheme: dark){body{background:#06111f;color:#e5e7eb}.card,.section{background:#0b1730;color:#e5e7eb;box-shadow:none} th{background:#0f1f3c;color:#cbd5e1} td{border-bottom:1px solid #22314f}.sub,.footer{color:#9ca3af}.track{background:#1e293b}}')
     $null = $html.Add('.wrap{max-width:1200px;margin:0 auto;} .hero{background:#0b1220;color:#fff;border-radius:18px;padding:28px 32px;margin-bottom:22px;}')
     $null = $html.Add('.hero h1{margin:0 0 10px;font-size:32px;} .hero p{margin:6px 0;color:#cbd5e1;} .eyebrow{letter-spacing:.1em;text-transform:uppercase;font-size:12px;color:#93c5fd;}')
-    $null = $html.Add('.logo{max-height:70px;max-width:280px;margin-bottom:14px;} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px;}')
+    $null = $html.Add('.logo-wrap{display:inline-block;background:rgba(255,255,255,.96);padding:10px 16px;border-radius:12px;margin-bottom:14px;} .logo{max-height:70px;max-width:280px;} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px;}')
     $null = $html.Add('.card{background:#fff;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(15,23,42,.08);} .kpi{font-size:30px;font-weight:700;margin-top:8px;} .sub{color:#475569;font-size:13px;}')
     $null = $html.Add('.section{background:#fff;border-radius:16px;padding:20px;box-shadow:0 10px 30px rgba(15,23,42,.08);margin-bottom:20px;} .section h2{margin:0 0 14px;font-size:22px;}')
     $null = $html.Add('.bars{display:grid;gap:10px;} .barlabel{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;} .track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;} .fill{height:12px;border-radius:999px;}')
@@ -389,15 +449,14 @@ function New-ExecutiveHtml {
     $null = $html.Add('</style></head><body><div class="wrap">')
     $null = $html.Add('<div class="hero">')
     if ($Internal -and $LogoUrl) {
-        $null = $html.Add('<img class="logo" src="' + (ConvertTo-SafeHtml $LogoUrl) + '" alt="Triple S Cloud Solutions logo">')
+        $null = $html.Add('<div class="logo-wrap"><img class="logo" src="' + (ConvertTo-SafeHtml $LogoUrl) + '" alt="Triple S Cloud Solutions logo"></div>')
         $null = $html.Add('<div class="eyebrow">Generated for internal use</div>')
     } else {
-        $null = $html.Add('<div class="eyebrow">Generated by Broadcom License Assessment Tool</div>')
+        $null = $html.Add('<div class="eyebrow">Generated by Triple S Cloud Solutions</div>')
     }
     $null = $html.Add('<h1>Broadcom / VMware License Assessment</h1>')
     $null = $html.Add('<p>Developed by Juliano Cunha (GitHub: julianscunha)</p>')
-    $customerSummary = (($Assessments | Select-Object -ExpandProperty CustomerName -Unique) -join ', ')
-    $null = $html.Add('<p>Customer / Company: ' + (ConvertTo-SafeHtml $customerSummary) + '</p>')
+    $null = $html.Add('<p>Customer / Company: ' + (ConvertTo-SafeHtml $script:SessionState.CompanyName) + '</p>')
     $null = $html.Add('<p>Assessment date: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '</p>')
     $null = $html.Add('</div>')
     $null = $html.Add('<div class="grid">')
@@ -466,6 +525,11 @@ function Export-PdfIfPossible {
 }
 
 function Restore-SessionChanges {
+    try {
+        if ($null -ne $script:SessionState.PreviousPowerCLICertAction -and $script:SessionState.PreviousPowerCLICertAction -ne '') {
+            Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction $script:SessionState.PreviousPowerCLICertAction -Confirm:$false | Out-Null
+        }
+    } catch { }
     if ($script:SessionState.ProcessExecutionPolicyChanged) {
         try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Undefined -Force } catch { }
     }
@@ -489,6 +553,10 @@ function Start-Assessment {
     Ensure-PowerCLI
     Configure-PowerCLI
 
+    $companyName = Read-Host 'Customer / Company name for the report'
+    if ([string]::IsNullOrWhiteSpace($companyName)) { $companyName = 'Not informed' }
+    $script:SessionState.CompanyName = $companyName
+
     $results = New-Object System.Collections.Generic.List[object]
     do {
         $server = Read-Host 'Enter vCenter Server / ESXi endpoint'
@@ -499,8 +567,7 @@ function Start-Assessment {
         if ($deployment -notin @('VVF','VCF')) { throw 'Deployment type must be VVF or VCF.' }
 
         $credential = Get-Credential -Message ('Credentials for ' + $server)
-        Connect-VIServer -Server $server -Credential $credential -ErrorAction Stop | Out-Null
-        Write-Log -Message ('Connected to ' + $server) -Level 'OK'
+        Connect-VIServerWithPrompt -Server $server -Credential $credential
 
         $clusters = Get-Cluster | Sort-Object Name
         if (-not $clusters) { throw 'No clusters found in the connected environment.' }
@@ -510,9 +577,11 @@ function Start-Assessment {
         }
     } while (Read-YesNo -Prompt 'Assess another environment in the same run?' -Default $false)
 
-    $jsonPath = Join-Path $OutputFolder 'broadcom-assessment.json'
-    $csvPath = Join-Path $OutputFolder 'broadcom-assessment.csv'
-    $htmlPath = Join-Path $OutputFolder 'broadcom-assessment.html'
+    $safeCompany = ($script:SessionState.CompanyName -replace '[^A-Za-z0-9._-]+','-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($safeCompany)) { $safeCompany = 'customer' }
+    $jsonPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.json')
+    $csvPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.csv')
+    $htmlPath = Join-Path $OutputFolder ($safeCompany + '-broadcom-assessment.html')
 
     $results | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding UTF8
     $results | Select-Object Server,Cluster,DeploymentType,TotalRequiredComputeLicenses,IncludedEntitlementTiB,RawVsanTiB,RequiredVsanAddOnTiB,VsanMethod,RequiresUpdatedMethod | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8

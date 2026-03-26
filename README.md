@@ -183,7 +183,6 @@ If you improve support for additional scenarios, reports, or validation logic, c
 This project is released under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
 
-## Example Output
+## Customer identification
 
-- Public dashboard sample: [EXAMPLE-OUTPUT.html](./EXAMPLE-OUTPUT.html)
-- Public markdown sample: [EXAMPLE-OUTPUT.md](./EXAMPLE-OUTPUT.md)
+At runtime, the script asks for a **Customer / Company name** and includes it in the executive output and exported file names.
