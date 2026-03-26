@@ -256,8 +256,6 @@ Use the HTML output if Word or local PDF tooling is unavailable.
 
 - `EXAMPLE-OUTPUT.html`
 - `EXAMPLE-OUTPUT.md`
-- `EXAMPLE-OUTPUT-Internal.html`
-- `EXAMPLE-OUTPUT-Internal.md`
 
 ---
 
