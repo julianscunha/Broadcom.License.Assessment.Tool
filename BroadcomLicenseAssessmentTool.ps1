@@ -183,20 +183,25 @@ function Ensure-PowerCLI {
         }
 
         Write-Log -Message 'Installing VMware.PowerCLI in CurrentUser scope. This can take a few minutes.' -Level 'INFO'
+        Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Downloading and installing module...' -PercentComplete 15
         Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Importing module...' -PercentComplete 85
 
         try {
             Import-Module VMware.PowerCLI -ErrorAction Stop
             $installedNow = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
             $ver = if ($installedNow) { $installedNow.Version.ToString() } else { 'installed' }
+            Write-Progress -Activity 'Installing VMware.PowerCLI' -Completed
             Write-Log -Message ('VMware PowerCLI installed and imported successfully. Version: ' + $ver) -Level 'OK'
             return
         }
         catch {
+            Write-Progress -Activity 'Installing VMware.PowerCLI' -Completed
             Restart-ScriptSessionIfRequested -Reason 'VMware PowerCLI was installed, but the current session did not refresh the module path automatically.'
         }
     }
     catch {
+        Write-Progress -Activity 'Installing VMware.PowerCLI' -Completed
         Write-Log -Message ('Failed to install VMware PowerCLI automatically: ' + $_.Exception.Message) -Level 'ERROR'
         throw 'PowerCLI installation failed. Re-run the script after resolving repository or internet access issues.'
     }
@@ -211,6 +216,36 @@ function Configure-PowerCLI {
         Write-Log -Message 'PowerCLI session configured to ignore invalid certificates.' -Level 'WARN'
     } else {
         Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -Confirm:$false | Out-Null
+    }
+}
+
+
+function Connect-VIServerWithPrompt {
+    param(
+        [Parameter(Mandatory=$true)][string]$Server,
+        [Parameter(Mandatory=$true)]$Credential
+    )
+
+    try {
+        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+        return
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($msg -match 'certificate' -or $msg -match 'SSL/TLS' -or $msg -match 'trust') {
+            Write-Log -Message ('Certificate validation failed while connecting to ' + $Server + '.') -Level 'WARN'
+            if (Read-YesNo -Prompt 'Ignore invalid certificate for this PowerCLI session and retry connection?' -Default $true) {
+                try {
+                    $script:SessionState.PreviousPowerCLICertAction = (Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue).InvalidCertificateAction
+                } catch { }
+                Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
+                $script:SessionState.PowerCLICertificateActionChanged = $true
+                Write-Log -Message 'Invalid certificate handling set to Ignore for this session after user confirmation.' -Level 'WARN'
+                Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+                return
+            }
+        }
+        throw
     }
 }
 
@@ -497,7 +532,7 @@ function Start-Assessment {
         if ($deployment -notin @('VVF','VCF')) { throw 'Deployment type must be VVF or VCF.' }
 
         $credential = Get-Credential -Message ('Credentials for ' + $server)
-        Connect-VIServer -Server $server -Credential $credential -ErrorAction Stop | Out-Null
+        Connect-VIServerWithPrompt -Server $server -Credential $credential
         Write-Log -Message ('Connected to ' + $server) -Level 'OK'
 
         $clusters = Get-Cluster | Sort-Object Name
