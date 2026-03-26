@@ -199,7 +199,7 @@ function Ensure-PowerCLI {
 
     # Configure CEIP and deprecation warnings in a hidden child session before importing in the current session.
     try {
-        $cmd = "try { Import-Module VMware.VimAutomation.Core -ErrorAction Stop | Out-Null; Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP `$false -Confirm:`$false | Out-Null; Set-PowerCLIConfiguration -Scope User -DisplayDeprecationWarnings `$false -Confirm:`$false | Out-Null } catch { }"
+        $cmd = "try { $env:VMWARE_CEIP_DISABLE='True'; Import-Module VMware.VimAutomation.Core -ErrorAction Stop | Out-Null; Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP `$false -Confirm:`$false | Out-Null; Set-PowerCLIConfiguration -Scope User -DisplayDeprecationWarnings `$false -Confirm:`$false | Out-Null } catch { }"
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command', $cmd) -WindowStyle Hidden -PassThru -Wait
     }
     catch { }
@@ -208,11 +208,13 @@ function Ensure-PowerCLI {
     $infoBak = $InformationPreference
     $progressBak = $ProgressPreference
     try {
+        $env:VMWARE_CEIP_DISABLE = 'True'
         $WarningPreference = 'SilentlyContinue'
         $InformationPreference = 'SilentlyContinue'
         $ProgressPreference = 'SilentlyContinue'
         Import-Module VMware.VimAutomation.Core -DisableNameChecking -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
+        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Fail -Confirm:$false | Out-Null
     }
     finally {
         $WarningPreference = $warningBak
@@ -238,7 +240,7 @@ function Configure-PowerCLI {
         Write-Log -Message 'PowerCLI session configured to ignore invalid certificates.' -Level 'WARN'
     }
     else {
-        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Prompt -Confirm:$false | Out-Null
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Fail -Confirm:$false | Out-Null
     }
 }
 
@@ -249,7 +251,7 @@ function Connect-VIServerWithPrompt {
     )
 
     try {
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
         Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
         return
     }
@@ -269,7 +271,7 @@ function Connect-VIServerWithPrompt {
         Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
         Write-Log -Message 'Invalid certificate handling set to Ignore for this session after user confirmation.' -Level 'WARN'
 
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
+        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop -WarningAction SilentlyContinue 3>$null 4>$null 5>$null 6>$null | Out-Null
         Write-Log -Message ('Connected to ' + $Server) -Level 'OK'
     }
 }
@@ -303,8 +305,8 @@ function Get-VsanRawCapacityTiB {
 
     $sumMB = 0
     $notes = 'Fallback method used. Capacity Tier disks summed via ESXCLI.'
-    foreach ($host in Get-VMHost -Location $Cluster) {
-        $esxcli = Get-EsxCli -VMHost $host -V2
+    foreach ($vmhost in Get-VMHost -Location $Cluster) {
+        $esxcli = Get-EsxCli -VMHost $vmhost -V2
         $storageItems = $esxcli.vsan.storage.list.Invoke()
         foreach ($item in $storageItems) {
             if ($item.IsCapacityTier -eq $true) {
