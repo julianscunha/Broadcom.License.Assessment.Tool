@@ -1,69 +1,64 @@
-
 # Broadcom License Assessment Tool
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
-![VMware](https://img.shields.io/badge/VMware-vSphere-green)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-![Status](https://img.shields.io/badge/Status-Enterprise--Ready-brightgreen)
+Enterprise PowerShell assessment tool for Broadcom / VMware licensing.
 
-Interactive PowerShell assessment tool for Broadcom / VMware licensing with executive-ready reporting.
+It connects to one or more vCenter / ESXi endpoints, calculates required compute cores, estimates bundled raw vSAN entitlement, evaluates vSAN Add-on exposure, optionally collects visible license inventory, and produces executive-ready HTML, JSON, CSV, LOG, and optional PDF outputs.
 
-## What it does
+## Main capabilities
 
-- Validates PowerShell / PowerCLI prerequisites
-- Connects to one or more vCenter / ESXi endpoints
-- Calculates required licensable compute cores
-- Calculates bundled vSAN entitlement for VVF or VCF
-- Measures visible raw vSAN footprint
-- Calculates required vSAN Add-on capacity
-- Optionally collects license inventory from the endpoint
-- Produces Gartner-style HTML output for executive / sales review
-- Exports JSON, CSV, LOG, and optional PDF
-
-## Key enterprise features
-
-- Interactive certificate handling
-- Customer name stamping in output files
-- Risk score for executive consumption
-- Heuristic VVF vs VCF recommendation
-- Optional commercial estimate inputs:
-  - `-EstimatedPricePerCore`
-  - `-EstimatedPricePerTiBAddon`
-- Clean final log output
-- Automatic disconnect at the end by default
+- Interactive prerequisite validation
+- PowerCLI bootstrap and module installation flow
+- Certificate retry prompt for lab or internal PKI environments
+- Multi-environment assessment in a single run
+- Executive HTML report with Gartner-style layout
+- Risk score, decision guidance, and business interpretation
+- Financial comparison between **VVF** and **VCF**
+- Optional rough commercial estimate using operator-supplied unit prices
+- License inventory table when exposed by the connected endpoint
+- Final disconnect from active VIServer sessions
 
 ## Parameters
 
-- `-Help`
-- `-CustomerName <string>`
-- `-DeploymentType <VVF|VCF>`
-- `-TrustInvalidCertificates`
-- `-DisconnectWhenDone <bool>`
-- `-ExportPdf`
-- `-CollectLicenseAssignments <bool>`
-- `-EstimatedPricePerCore <decimal>`
-- `-EstimatedPricePerTiBAddon <decimal>`
+- `-CustomerName <string>` customer or company name displayed in outputs
+- `-DeploymentType <VVF|VCF>` default model used for the connected environment prompt
+- `-TrustInvalidCertificates` ignore invalid certificates automatically for the current session
+- `-DisconnectWhenDone <bool>` default `True`
+- `-ExportPdf` export PDF when local prerequisites are available
+- `-CollectLicenseAssignments <bool>` default `True`
+- `-EstimatedCurrency <string>` currency label used in all estimate fields. Use **one currency consistently** across all estimate parameters, for example `BRL`, `USD`, or `EUR`
+- `-EstimatedPricePerCore <decimal>` fallback per-core unit price used for both VVF and VCF when model-specific core prices are not supplied
+- `-EstimatedPricePerCoreVVF <decimal>` optional VVF-specific per-core unit price
+- `-EstimatedPricePerCoreVCF <decimal>` optional VCF-specific per-core unit price
+- `-EstimatedPricePerTiBAddon <decimal>` vSAN Add-on per-TiB unit price
 
-## Example usage
+## Financial comparison logic
+
+The report calculates a rough commercial comparison using the provided pricing inputs:
+
+- **VVF included raw vSAN entitlement** = `RequiredComputeCores * 0.25 TiB`
+- **VCF included raw vSAN entitlement** = `RequiredComputeCores * 1.0 TiB`
+- **Required vSAN Add-on TiB** = `max(raw vSAN TiB - included entitlement, 0)`, rounded up to whole TiB
+- **Estimated total cost** = `Core cost + Add-on cost`
+
+This comparison is intended for proposal shaping, not as an official price quote.
+
+## Example commands
 
 ```powershell
 Get-Help .\BroadcomLicenseAssessmentTool.ps1 -Full
 
 .\BroadcomLicenseAssessmentTool.ps1 `
-  -CustomerName "ACME Corp" `
-  -DeploymentType VVF `
+  -CustomerName "Comerc" `
+  -EstimatedCurrency BRL `
+  -EstimatedPricePerCoreVVF 125 `
+  -EstimatedPricePerCoreVCF 165 `
+  -EstimatedPricePerTiBAddon 450 `
   -ExportPdf
-
-.\BroadcomLicenseAssessmentTool.ps1 `
-  -CustomerName "ACME Corp" `
-  -DeploymentType VCF `
-  -EstimatedPricePerCore 125 `
-  -EstimatedPricePerTiBAddon 450
 ```
 
-## Output
+## Output files
 
-The tool writes files to the `output` folder in the current working directory:
+The script writes files to `output` under the current working directory:
 
 - `Customer-Broadcom-License-Assessment.html`
 - `Customer-Broadcom-License-Assessment.json`
@@ -71,18 +66,8 @@ The tool writes files to the `output` folder in the current working directory:
 - `Customer-Broadcom-License-Assessment.log`
 - `Customer-Broadcom-License-Assessment.pdf` when PDF export succeeds
 
-## VCF vs VVF note
+## Notes
 
-The recommendation is heuristic. It uses signals visible from the connected endpoint, primarily:
-
-- licensable compute cores
-- bundled vSAN entitlement
-- visible raw vSAN footprint
-- optional license inventory exposure
-
-It does **not** claim authoritative feature detection for products not directly surfaced by the endpoint.
-
-## Example output files
-
-- `EXAMPLE-OUTPUT.html`
-- `EXAMPLE-OUTPUT.md`
+- License inventory depends on what the connected endpoint exposes and what the credential is authorized to read
+- Financial results are heuristic and depend entirely on the operator-supplied pricing inputs
+- The feature-fit recommendation between VVF and VCF is advisory, not contractual
