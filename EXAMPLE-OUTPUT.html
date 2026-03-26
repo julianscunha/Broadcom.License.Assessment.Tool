@@ -1,23 +1,79 @@
+
 <!DOCTYPE html>
-<html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>EXAMPLE-OUTPUT</title>
 <style>
-:root{--bg:#f4f7fb;--card:#fff;--text:#0f172a;--muted:#475569;--line:#dbe3ef;--accent:#2563eb}
-@media (prefers-color-scheme: dark){:root{--bg:#08111f;--card:#0f1b2d;--text:#f8fafc;--muted:#cbd5e1;--line:#20304b;--accent:#7dd3fc}}
-body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}
-.wrap{max-width:1180px;margin:24px auto;padding:0 18px}.hero,.card{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 8px 28px rgba(15,23,42,.06)}
-.hero{padding:32px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.12em;color:var(--accent);margin-bottom:10px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-top:18px}.card{padding:18px}.kpi-label{color:var(--muted);font-size:13px}.kpi-value{font-size:28px;font-weight:700}.bar{height:12px;background:rgba(148,163,184,.24);border-radius:999px;overflow:hidden;margin-top:8px}.bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#22c55e)}table{width:100%;border-collapse:collapse}th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-size:12px;text-transform:uppercase}.section{margin-top:18px}
-</style></head>
-<body><div class="wrap"><div class="hero"><div class="eyebrow">EXAMPLE OUTPUT</div><h1>Broadcom / VMware License Assessment</h1><p>Customer: ACME Corp</p><p>Dashboard preview for documentation purposes.</p></div>
-<div class="grid">
-<div class="card"><div class="kpi-label">Required Compute Cores</div><div class="kpi-value">144</div></div>
-<div class="card"><div class="kpi-label">Included vSAN Entitlement (TiB)</div><div class="kpi-value">36.00</div></div>
-<div class="card"><div class="kpi-label">Measured Raw vSAN (TiB)</div><div class="kpi-value">92.40</div></div>
-<div class="card"><div class="kpi-label">Required vSAN Add-on (TiB)</div><div class="kpi-value">57</div></div>
+:root { --bg:#f4f7fb; --card:#ffffff; --text:#0f172a; --muted:#475569; --line:#dbe3ef; --accent:#2563eb; }
+@media (prefers-color-scheme: dark) { :root { --bg:#08111f; --card:#0f1b2d; --text:#f8fafc; --muted:#cbd5e1; --line:#20304b; --accent:#7dd3fc; } }
+body { font-family: Segoe UI, Arial, sans-serif; margin:0; background:var(--bg); color:var(--text); }
+.wrap { max-width:1180px; margin:24px auto; padding:0 18px; }
+.hero,.card { background:var(--card); border:1px solid var(--line); border-radius:20px; box-shadow:0 8px 28px rgba(15,23,42,.06); }
+.hero { padding:32px; }
+.eyebrow { font-size:12px; font-weight:700; letter-spacing:.12em; color:var(--accent); margin-bottom:10px; }
+.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:18px; }
+.card { padding:18px; }
+.kpi-label { color:var(--muted); font-size:13px; }
+.kpi-value { font-size:28px; font-weight:700; }
+.bar { height:12px; background:rgba(148,163,184,.24); border-radius:999px; overflow:hidden; margin-top:8px; }
+.bar>span { display:block; height:100%; background:linear-gradient(90deg,var(--accent),#22c55e); }
+table { width:100%; border-collapse:collapse; }
+th,td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+.section { margin-top:18px; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="eyebrow">EXAMPLE OUTPUT</div>
+    <h1>Broadcom / VMware License Assessment</h1>
+    <p>Customer: ACME Corp</p>
+    <p>Example of the executive dashboard output.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="kpi-label">Required Compute Cores</div><div class="kpi-value">144</div></div>
+    <div class="card"><div class="kpi-label">Included vSAN Entitlement (TiB)</div><div class="kpi-value">36.00</div></div>
+    <div class="card"><div class="kpi-label">Measured Raw vSAN (TiB)</div><div class="kpi-value">92.40</div></div>
+    <div class="card"><div class="kpi-label">Required vSAN Add-on (TiB)</div><div class="kpi-value">57</div></div>
+  </div>
+
+  <div class="card section"><h2>Executive Summary</h2><p>The environment requires additional vSAN licensing beyond included entitlement and should be evaluated commercially with a VCF-versus-VVF lens.</p></div>
+
+  <div class="two section">
+    <div class="card"><h2>Key Findings</h2><ul><li>Compute required: 144 cores</li><li>Included entitlement: 36.00 TiB</li><li>Measured raw vSAN: 92.40 TiB</li><li>Required vSAN Add-on: 57 TiB</li><li>Suggested direction: VCF</li></ul></div>
+    <div class="card"><h2>Risk Score</h2><p><strong>74 / 100 (High)</strong></p><ul><li>Storage-heavy profile exceeds included entitlement</li><li>Additional licensing required</li></ul></div>
+  </div>
+
+  <div class="two section">
+    <div class="card">
+      <h2>Dashboard</h2>
+      <div class="kpi-label">Compute required</div><div class="bar"><span style="width:100%"></span></div>
+      <div class="kpi-label">Included entitlement TiB</div><div class="bar"><span style="width:39%"></span></div>
+      <div class="kpi-label">Measured raw vSAN TiB</div><div class="bar"><span style="width:64%"></span></div>
+      <div class="kpi-label">Required vSAN Add-on TiB</div><div class="bar"><span style="width:39%"></span></div>
+    </div>
+    <div class="card">
+      <h2>VCF vs VVF Suitability</h2>
+      <p><strong>Suggested direction:</strong> VCF</p>
+      <p>Storage-heavy environments often align better with the higher included raw vSAN entitlement available in VCF.</p>
+    </div>
+  </div>
+
+  <div class="card section">
+    <h2>Cluster Calculations</h2>
+    <table>
+      <thead><tr><th>Server</th><th>Cluster</th><th>Hosts</th><th>Required Cores</th><th>Included TiB</th><th>Raw vSAN TiB</th><th>Required Add-on TiB</th></tr></thead>
+      <tbody>
+        <tr><td>vcsa-prod.local</td><td>PROD-CLUSTER</td><td>3</td><td>96</td><td>24.00</td><td>78.60</td><td>55</td></tr>
+        <tr><td>vcsa-dr.local</td><td>DR-CLUSTER</td><td>3</td><td>48</td><td>12.00</td><td>13.80</td><td>2</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
-<div class="card section"><h2>Dashboard</h2>
-<div class="kpi-label">Compute required</div><div class="bar"><span style="width:100%"></span></div>
-<div class="kpi-label">Included entitlement TiB</div><div class="bar"><span style="width:39%"></span></div>
-<div class="kpi-label">Measured raw vSAN TiB</div><div class="bar"><span style="width:64%"></span></div>
-<div class="kpi-label">Required vSAN Add-on TiB</div><div class="bar"><span style="width:39%"></span></div></div>
-<div class="card section"><h2>Cluster Calculations</h2><table><thead><tr><th>Server</th><th>Cluster</th><th>Hosts</th><th>Required cores</th><th>Included TiB</th><th>Raw vSAN TiB</th><th>Required Add-on TiB</th></tr></thead><tbody><tr><td>vcsa-prod.local</td><td>PROD-CLUSTER</td><td>3</td><td>96</td><td>24.00</td><td>78.60</td><td>55</td></tr><tr><td>vcsa-dr.local</td><td>DR-CLUSTER</td><td>3</td><td>48</td><td>12.00</td><td>13.80</td><td>2</td></tr></tbody></table></div></div></body></html>
+</body>
+</html>

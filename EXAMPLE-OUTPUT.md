@@ -1,12 +1,23 @@
+
 # EXAMPLE-OUTPUT
 
 ## Executive Summary
+
+The environment requires additional vSAN licensing beyond included entitlement and should be evaluated commercially with a VCF-versus-VVF lens.
+
+## Key Findings
 
 - Customer: ACME Corp
 - Required compute cores: 144
 - Included vSAN entitlement: 36.00 TiB
 - Measured raw vSAN: 92.40 TiB
 - Required vSAN Add-on: 57 TiB
+- Suggested direction: VCF
+
+## Risk Score
+
+- Score: 74 / 100
+- Level: High
 
 ## Dashboard
 
