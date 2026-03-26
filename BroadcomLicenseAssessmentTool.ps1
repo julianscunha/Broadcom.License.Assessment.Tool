@@ -63,65 +63,6 @@ function Read-YesNo {
 }
 
 
-function Invoke-WithWarningSilenced {
-    param([Parameter(Mandatory=$true)][scriptblock]$ScriptBlock)
-    $previousWarningPreference = $WarningPreference
-    try {
-        $WarningPreference = 'SilentlyContinue'
-        & $ScriptBlock
-    }
-    finally {
-        $WarningPreference = $previousWarningPreference
-    }
-}
-
-function Invoke-ModuleInstallWithProgress {
-    param([Parameter(Mandatory=$true)][string]$ModuleName)
-
-    $job = Start-Job -ScriptBlock {
-        param($Name)
-        $ErrorActionPreference = 'Stop'
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-        $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
-        if (-not $nugetProvider) {
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-        }
-
-        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-        }
-
-        if (-not (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
-            throw 'PowerShellGet / Install-Module is not available in this session.'
-        }
-
-        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-    } -ArgumentList $ModuleName
-
-    $percent = 0
-    $step = 4
-    while ($true) {
-        $completed = Wait-Job -Job $job -Timeout 1
-        if ($completed) { break }
-        $percent += $step
-        if ($percent -gt 95) { $percent = 15 }
-        Write-Progress -Activity ('Installing ' + $ModuleName) -Status 'Downloading and installing PowerShell modules. This may take several minutes.' -PercentComplete $percent
-    }
-    Write-Progress -Activity ('Installing ' + $ModuleName) -Completed
-
-    $jobState = $job.State
-    $jobOutput = Receive-Job -Job $job -Keep
-    if ($jobState -ne 'Completed') {
-        $jobError = $job.ChildJobs[0].JobStateInfo.Reason
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-        if ($jobError) { throw $jobError }
-        throw ('Installation job finished with state: ' + $jobState)
-    }
-    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    return $jobOutput
-}
-
 function Restart-ScriptSessionIfRequested {
     param(
         [string]$Reason = 'A new PowerShell session is recommended to continue.'
@@ -202,7 +143,7 @@ function Ensure-PowerCLI {
     $minimumVersion = [version]'13.3.0'
     $installed = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
     if ($installed -and $installed.Version -ge $minimumVersion) {
-        Invoke-WithWarningSilenced { Import-Module VMware.PowerCLI -ErrorAction Stop | Out-Null }
+        Import-Module VMware.PowerCLI -ErrorAction Stop
         Write-Log -Message ("Prereq OK - VMware.PowerCLI {0}" -f $installed.Version) -Level 'OK'
         return
     }
@@ -224,17 +165,28 @@ function Ensure-PowerCLI {
         $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
         if (-not $nugetProvider) {
             Write-Log -Message 'NuGet provider not found. Installing it now.' -Level 'INFO'
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
         }
 
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            Write-Log -Message 'PSGallery will be marked as Trusted for module installation in CurrentUser context.' -Level 'INFO'
+            try {
+                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+                Write-Log -Message 'PSGallery marked as Trusted for module installation.' -Level 'INFO'
+            }
+            catch {
+                Write-Log -Message ('Unable to mark PSGallery as Trusted automatically: ' + $_.Exception.Message) -Level 'WARN'
+            }
+        }
+
+        if (-not (Get-Command Install-Module -ErrorAction SilentlyContinue)) {
+            throw 'PowerShellGet / Install-Module is not available in this session.'
         }
 
         Write-Log -Message 'Installing VMware.PowerCLI in CurrentUser scope. This can take a few minutes.' -Level 'INFO'
-        Invoke-ModuleInstallWithProgress -ModuleName 'VMware.PowerCLI' | Out-Null
+        Install-Module -Name VMware.PowerCLI -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
 
         try {
-            Invoke-WithWarningSilenced { Import-Module VMware.PowerCLI -ErrorAction Stop | Out-Null }
+            Import-Module VMware.PowerCLI -ErrorAction Stop
             $installedNow = Get-Module -ListAvailable -Name 'VMware.PowerCLI' | Sort-Object Version -Descending | Select-Object -First 1
             $ver = if ($installedNow) { $installedNow.Version.ToString() } else { 'installed' }
             Write-Log -Message ('VMware PowerCLI installed and imported successfully. Version: ' + $ver) -Level 'OK'
@@ -251,23 +203,14 @@ function Ensure-PowerCLI {
 }
 
 function Configure-PowerCLI {
-    try {
-        $config = Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue
-        if ($config) {
-            $script:SessionState.PreviousPowerCLICertAction = $config.InvalidCertificateAction
-        }
-    } catch { }
-
     if ($TrustInvalidCertificates) {
-        Invoke-WithWarningSilenced {
-            Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
-        }
+        try {
+            $script:SessionState.PreviousPowerCLICertAction = (Get-PowerCLIConfiguration -Scope Session -ErrorAction SilentlyContinue).InvalidCertificateAction
+        } catch { }
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
         Write-Log -Message 'PowerCLI session configured to ignore invalid certificates.' -Level 'WARN'
-    }
-    else {
-        Invoke-WithWarningSilenced {
-            Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -Confirm:$false | Out-Null
-        }
+    } else {
+        Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -Confirm:$false | Out-Null
     }
 }
 
@@ -300,8 +243,8 @@ function Get-VsanRawCapacityTiB {
 
     $sumMB = 0
     $notes = 'Fallback method used. Capacity Tier disks summed via ESXCLI.'
-    foreach ($host in Get-VMHost -Location $Cluster) {
-        $esxcli = Get-EsxCli -VMHost $host -V2
+    foreach ($vmhost in Get-VMHost -Location $Cluster) {
+        $esxcli = Get-EsxCli -VMHost $vmhost -V2
         $storageItems = $esxcli.vsan.storage.list.Invoke()
         foreach ($item in $storageItems) {
             if ($item.IsCapacityTier -eq $true) {
@@ -370,22 +313,22 @@ function New-ClusterAssessment {
     $hosts = Get-VMHost -Location $Cluster | Sort-Object Name
     $hostRows = @()
     $totalAdjustedCores = 0
-    foreach ($host in $hosts) {
-        $cpuPackages = [int]$host.NumCpu
-        $coresPerPackage = [int]$host.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
+    foreach ($vmhost in $hosts) {
+        $cpuPackages = [int]$vmhost.NumCpu
+        $coresPerPackage = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores / [math]::Max($cpuPackages,1)
         $actualCores = $cpuPackages * $coresPerPackage
         $adjustedCores = [math]::Max($actualCores, (16 * $cpuPackages))
         $includedVsanTiB = if ($DeploymentType -eq 'VCF') { $adjustedCores * 1.0 } else { $adjustedCores * 0.25 }
         $totalAdjustedCores += $adjustedCores
         $hostRows += [pscustomobject]@{
             Cluster = $Cluster.Name
-            VMHost = $host.Name
+            VMHost = $vmhost.Name
             NumCpuSockets = $cpuPackages
             NumCpuCoresPerSocket = $coresPerPackage
             ActualCoreCount = $actualCores
             FoundationLicenseCoreCount = $adjustedCores
             IncludedVsanTiB = [math]::Round($includedVsanTiB,2)
-            HostVersion = $host.Version
+            HostVersion = $vmhost.Version
         }
     }
 
@@ -525,47 +468,11 @@ function Restore-SessionChanges {
         try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Undefined -Force } catch { }
     }
     try {
-        if ($script:SessionState.PreviousPowerCLICertAction) {
-            Invoke-WithWarningSilenced {
-                Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction $script:SessionState.PreviousPowerCLICertAction -Confirm:$false | Out-Null
-            }
-        }
-    } catch { }
-    try {
         if ($DisconnectWhenDone) {
             Get-VIServer -ErrorAction SilentlyContinue | Disconnect-VIServer -Confirm:$false | Out-Null
             Write-Log -Message 'Disconnected from all VIServers.' -Level 'OK'
         }
     } catch { }
-}
-
-function Connect-VIServerInteractive {
-    param(
-        [Parameter(Mandatory=$true)][string]$Server,
-        [Parameter(Mandatory=$true)]$Credential
-    )
-
-    try {
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
-        return
-    }
-    catch {
-        $message = $_.Exception.Message
-        $looksLikeCertError = ($message -match 'certificate' -or $message -match 'trust relationship' -or $message -match 'SSL/TLS' -or $message -match 'certific')
-        if (-not $looksLikeCertError -or $TrustInvalidCertificates) { throw }
-
-        Write-Log -Message ('Certificate validation failed while connecting to ' + $Server + '.') -Level 'WARN'
-        if (-not (Read-YesNo -Prompt 'Ignore invalid certificate for this PowerCLI session and retry connection?' -Default $true)) {
-            throw
-        }
-
-        Invoke-WithWarningSilenced {
-            Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP:$false -DisplayDeprecationWarnings:$false -InvalidCertificateAction Ignore -Confirm:$false | Out-Null
-        }
-        $script:TrustInvalidCertificates = $true
-        Write-Log -Message 'Invalid certificate handling set to Ignore for this session after user confirmation.' -Level 'WARN'
-        Connect-VIServer -Server $Server -Credential $Credential -ErrorAction Stop | Out-Null
-    }
 }
 
 function Start-Assessment {
@@ -590,7 +497,7 @@ function Start-Assessment {
         if ($deployment -notin @('VVF','VCF')) { throw 'Deployment type must be VVF or VCF.' }
 
         $credential = Get-Credential -Message ('Credentials for ' + $server)
-        Connect-VIServerInteractive -Server $server -Credential $credential
+        Connect-VIServer -Server $server -Credential $credential -ErrorAction Stop | Out-Null
         Write-Log -Message ('Connected to ' + $server) -Level 'OK'
 
         $clusters = Get-Cluster | Sort-Object Name

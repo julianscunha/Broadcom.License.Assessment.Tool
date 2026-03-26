@@ -181,3 +181,9 @@ If you improve support for additional scenarios, reports, or validation logic, c
 ## License
 
 This project is released under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+
+
+## Example Output
+
+- Public dashboard sample: [EXAMPLE-OUTPUT.html](./EXAMPLE-OUTPUT.html)
+- Public markdown sample: [EXAMPLE-OUTPUT.md](./EXAMPLE-OUTPUT.md)
