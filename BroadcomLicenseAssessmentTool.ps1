@@ -163,29 +163,101 @@ function Ensure-PowerCLI {
     }
 
     Write-Log -Message 'Prereq FAIL - VMware.PowerCLI 13.3+ not found.' -Level 'ERROR' -Color 'Red'
-    if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for CurrentUser now?' -DefaultYes $true)) {
+
+    if (-not (Read-YesNo -Prompt 'Install or update VMware PowerCLI 13.3+ for AllUsers now?' -DefaultYes $true)) {
         throw 'VMware.PowerCLI 13.3+ is required.'
     }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+
+    try {
+        Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item "$env:LOCALAPPDATA\PackageManagement" -Recurse -Force -ErrorAction SilentlyContinue
     }
-    try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null } catch {}
+    catch {}
+
+    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+        Install-PackageProvider `
+            -Name NuGet `
+            -MinimumVersion 2.8.5.201 `
+            -Force `
+            -Confirm:$false | Out-Null
+    }
+
+    try {
+        Set-PSRepository `
+            -Name PSGallery `
+            -InstallationPolicy Trusted `
+            -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch {}
+
+    $ProgressPreference = 'SilentlyContinue'
+    $WarningPreference  = 'SilentlyContinue'
+    $VerbosePreference  = 'SilentlyContinue'
 
     Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Downloading from PSGallery' -PercentComplete 15
-    Install-Module -Name VMware.PowerCLI -Scope CurrentUser -AllowClobber -Force -ErrorAction Stop
+
+    Install-Module `
+        -Name VMware.PowerCLI `
+        -Scope AllUsers `
+        -AllowClobber `
+        -Force `
+        -SkipPublisherCheck `
+        -Confirm:$false `
+        -WarningAction SilentlyContinue `
+        -ErrorAction Stop | Out-Null
+
     Write-Progress -Activity 'Installing VMware.PowerCLI' -Status 'Importing module' -PercentComplete 85
-    Import-Module VMware.PowerCLI -DisableNameChecking -Scope Global -ErrorAction Stop | Out-Null
+
+    try {
+        $env:POWERSHELL_TELEMETRY_OPTOUT = 1
+        Import-Module VMware.PowerCLI `
+            -DisableNameChecking `
+            -Scope Global `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Import-Module VMware.VimAutomation.Core `
+            -Scope Global `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | Out-Null
+
+        Import-Module VMware.VimAutomation.Common `
+            -Scope Global `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | Out-Null
+
+        Import-Module VMware.VimAutomation.Sdk `
+            -Scope Global `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | Out-Null
+    }
+
     try {
         Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
         Set-PowerCLIConfiguration -Scope Session -ParticipateInCEIP $false -Confirm:$false | Out-Null
         Set-PowerCLIConfiguration -Scope Session -DisplayDeprecationWarnings:$false -InvalidCertificateAction Fail -Confirm:$false | Out-Null
-    } catch {}
+    }
+    catch {}
+
     Write-Progress -Activity 'Installing VMware.PowerCLI' -Completed
 
     $loaded = Get-Module -ListAvailable VMware.PowerCLI | Sort-Object Version -Descending | Select-Object -First 1
-    if (-not $loaded) { throw 'VMware.PowerCLI installation did not complete successfully.' }
+
+    if (-not $loaded) {
+
+        $coreLoaded = Get-Module -ListAvailable VMware.VimAutomation.Core | Sort-Object Version -Descending | Select-Object -First 1
+
+        if (-not $coreLoaded) {
+            throw 'VMware.PowerCLI installation did not complete successfully.'
+        }
+
+        Write-Log -Message ("Prereq OK - VMware.VimAutomation.Core {0}" -f $coreLoaded.Version) -Level 'OK' -Color 'Green'
+        return
+    }
+
     Write-Log -Message ("Prereq OK - VMware.PowerCLI {0}" -f $loaded.Version) -Level 'OK' -Color 'Green'
 }
 
