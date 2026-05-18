@@ -415,7 +415,7 @@ function New-ClusterAssessment {
 
     $totalCoresRequired = 0
     foreach ($vmhost in (Get-VMHost -Location $Cluster -ErrorAction Stop | Sort-Object Name)) {
-        $numSockets = [int]$vmhost.NumCpu
+        $numSockets = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuPackages
         $numCpuCores = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores
         $numCoresPerSocket = if ($numSockets -gt 0) { [int]($numCpuCores / $numSockets) } else { 0 }
         $billable = [math]::Max($numCoresPerSocket,16)
