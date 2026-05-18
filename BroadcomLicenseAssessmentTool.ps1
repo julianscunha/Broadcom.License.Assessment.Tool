@@ -639,52 +639,62 @@ function Export-PdfFromHtml {
             }
 
             
-$hostLicenseRows = foreach ($vc in $assessment.vCenters) {
+$hostLicenseRows = ''
 
-    foreach ($cluster in $vc.Clusters) {
+$hostLicenseRows = foreach ($vmhost in (Get-VMHost | Sort-Object Name)) {
 
-        foreach ($host in $cluster.Hosts) {
+    $clusterName = '-'
 
-            $physicalCores = [int]$host.TotalPhysicalCores
-            $sockets       = [int]$host.CpuSockets
+    try {
+        $clusterName = (Get-Cluster -VMHost $vmhost -ErrorAction SilentlyContinue).Name
+    }
+    catch {}
 
-            $minimumCores = $sockets * 16
+    $physicalCores = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores
 
-            $licensableCores = [Math]::Max(
-                $physicalCores,
-                $minimumCores
-            )
+    $sockets = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuPackages
 
-            $ruleApplied = if ($licensableCores -gt $physicalCores) {
-                'Yes'
-            }
-            else {
-                'No'
-            }
+    $coresPerSocket = [int]($physicalCores / $sockets)
 
-            $rowClass = if ($ruleApplied -eq 'Yes') {
-                'highlight-license-impact'
-            }
-            else {
-                ''
-            }
+    $licensablePerSocket = [Math]::Max($coresPerSocket,16)
+
+    $licensableCores = $sockets * $licensablePerSocket
+
+    $ruleApplied = if ($coresPerSocket -lt 16) {
+        'Yes'
+    }
+    else {
+        'No'
+    }
+
+    $rowClass = if ($ruleApplied -eq 'Yes') {
+        'highlight-license-impact'
+    }
+    else {
+        ''
+    }
+
+    $assignedLicense = '-'
+
+    try {
+        $assignedLicense = $vmhost.ExtensionData.Config.Product.Name
+    }
+    catch {}
 
 @"
 <tr class="$rowClass">
-    <td>$($host.Name)</td>
-    <td>$($cluster.Name)</td>
+    <td>$($vmhost.Name)</td>
+    <td>$clusterName</td>
     <td>$sockets</td>
     <td>$physicalCores</td>
     <td><strong>$licensableCores</strong></td>
     <td>$ruleApplied</td>
-    <td>$($host.AssignedLicense)</td>
-    <td>$([math]::Round($host.RawVsanTiB,2))</td>
-    <td>$($host.CpuModel)</td>
-    <td>$($host.Version)</td>
+    <td>$assignedLicense</td>
+    <td>-</td>
+    <td>$($vmhost.ProcessorType)</td>
+    <td>$($vmhost.Version)</td>
 </tr>
 "@
-        }
-    }
 }
 
 $hostLicenseRows = $hostLicenseRows -join "`n"
