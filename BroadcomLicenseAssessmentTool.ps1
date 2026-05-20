@@ -312,37 +312,42 @@ function Get-VsanRawCapacityTiB {
 }
 
 function Get-LicenseAssignments {
-    param([Parameter(Mandatory=$true)]$Server,[bool]$Enabled=$true)
+
+    param(
+        [Parameter(Mandatory=$true)]
+        $Server,
+
+        [bool]$Enabled = $true
+    )
 
     $emptySummary = [pscustomobject]@{
         TotalLicenses = 0
-        Expired = 0
-        Expiring30 = 0
-        Expiring90 = 0
-        Evaluation = 0
+        Expired       = 0
+        Expiring30    = 0
+        Expiring90    = 0
+        Evaluation    = 0
     }
 
     if (-not $Enabled) {
+
         return [pscustomobject]@{
             AssignmentRows = @()
-            Status = 'Disabled'
-            Summary = $emptySummary
+            Status         = 'Disabled'
+            Summary        = $emptySummary
         }
     }
 
     try {
-        $serviceInstance = Get-View ServiceInstance -Server $Server -ErrorAction Stop
-        $licenseManagerMoRef = $serviceInstance.Content.LicenseManager
-        if (-not $licenseManagerMoRef) {
-            return [pscustomobject]@{
-                AssignmentRows = @()
-                Status = 'Unavailable'
-                Summary = $emptySummary
-            }
-        }
 
-        $licenseManager = Get-View -Id $licenseManagerMoRef -Server $Server -ErrorAction Stop
+        $si = Get-View ServiceInstance -Server $Server -ErrorAction Stop
+
+        $licenseManager = Get-View `
+            $si.Content.LicenseManager `
+            -Server $Server `
+            -ErrorAction Stop
+
         $rows = @()
+
         $totalLicenses = 0
         $expired = 0
         $exp30 = 0
@@ -350,62 +355,88 @@ function Get-LicenseAssignments {
         $evaluation = 0
 
         foreach ($lic in @($licenseManager.Licenses)) {
+
             $totalLicenses++
-            $edition = ''
-            $expires = ''
-            $isEval = $false
+
             $expirationDate = $null
+            $expires = ''
 
             foreach ($prop in @($lic.Properties)) {
-                if ($prop.Key -match 'editionKey|productName') { $edition = [string]$prop.Value }
+
                 if ($prop.Key -match 'expirationDate|expiration') {
-                    $parsed = $null
-                    if ([datetime]::TryParse([string]$prop.Value, [ref]$parsed)) {
-                        $expirationDate = $parsed
-                        $expires = $parsed.ToString('yyyy-MM-dd')
-                    } else {
+
+                    try {
+
+                        $expirationDate = [datetime]$prop.Value
+                        $expires = $expirationDate.ToString('yyyy-MM-dd')
+
+                    }
+                    catch {
+
                         $expires = [string]$prop.Value
                     }
                 }
-                if ($prop.Key -match 'evaluation') { $isEval = ([string]$prop.Value -match 'true') }
             }
+
+            $isEval = ($lic.EditionKey -eq 'eval')
 
             if ($expirationDate) {
+
                 $days = ($expirationDate - (Get-Date)).TotalDays
-                if ($days -lt 0) { $expired++ }
-                elseif ($days -le 30) { $exp30++ }
-                elseif ($days -le 90) { $exp90++ }
+
+                if ($days -lt 0) {
+                    $expired++
+                }
+                elseif ($days -le 30) {
+                    $exp30++
+                }
+                elseif ($days -le 90) {
+                    $exp90++
+                }
             }
-            if ($isEval) { $evaluation++ }
+
+            if ($isEval) {
+                $evaluation++
+            }
 
             $rows += [pscustomobject]@{
-                Server = $Server.Name
-                Name = $lic.Name
-                Edition = $edition
-                Total = $lic.Total
-                Used = $lic.Used
-                CostUnit = $lic.CostUnit
-                Expires = $expires
-                Evaluation = $isEval
+                Server       = $Server.Name
+                Name         = $lic.Name
+                Edition      = $lic.EditionKey
+                LicenseKey   = $lic.LicenseKey
+                Total        = $lic.Total
+                Used         = $lic.Used
+                CostUnit     = $lic.CostUnit
+                Expires      = $expires
+                Evaluation   = $isEval
             }
         }
 
         return [pscustomobject]@{
             AssignmentRows = $rows
-            Status = 'OK'
+            Status         = 'OK'
+
             Summary = [pscustomobject]@{
                 TotalLicenses = $totalLicenses
-                Expired = $expired
-                Expiring30 = $exp30
-                Expiring90 = $exp90
-                Evaluation = $evaluation
+                Expired       = $expired
+                Expiring30    = $exp30
+                Expiring90    = $exp90
+                Evaluation    = $evaluation
             }
         }
-    } catch {
+
+    }
+    catch {
+
+        Write-Log `
+            -Message ("License inventory collection failed on server {0}: {1}" -f $Server.Name, $_.Exception.Message) `
+            -Level 'WARN' `
+            -Color 'Yellow'
+
         return [pscustomobject]@{
             AssignmentRows = @()
-            Status = 'Unavailable'
-            Summary = $emptySummary
+            Status         = 'Unavailable'
+            Summary        = $emptySummary
         }
     }
 }
@@ -587,7 +618,82 @@ function Export-PdfFromHtml {
 
 
         function New-ExecutiveHtml {
-            param([Parameter(Mandatory=$true)]$Assessment,[Parameter(Mandatory=$true)][string]$Path)
+
+    param(
+        [Parameter(Mandatory=$true)]
+        $Assessment,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+$hostLicenseRows = foreach ($vmhost in (Get-VMHost -Server $script:ConnectedServers | Sort-Object Name)) {
+
+        $clusterName = '-'
+
+        try {
+            $clusterName = (Get-Cluster -VMHost $vmhost -ErrorAction SilentlyContinue).Name
+        }
+        catch {}
+
+        $physicalCores = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuCores
+
+        $sockets = [int]$vmhost.ExtensionData.Hardware.CpuInfo.NumCpuPackages
+
+        $coresPerSocket = [int]($physicalCores / $sockets)
+
+        $licensablePerSocket = [Math]::Max($coresPerSocket,16)
+
+        $licensableCores = $sockets * $licensablePerSocket
+
+        $ruleApplied = if ($coresPerSocket -lt 16) {
+            'Yes'
+        }
+        else {
+            'No'
+        }
+
+        $rowClass = if ($ruleApplied -eq 'Yes') {
+            'highlight-license-impact'
+        }
+        else {
+            ''
+        }
+
+        $assignedLicense = '-'
+
+        try {
+            $assignedLicense = $vmhost.ExtensionData.Config.Product.Name
+        }
+        catch {}
+
+@"
+<tr class="$rowClass">
+    <td>$($vmhost.Name)</td>
+    <td>$clusterName</td>
+    <td>$sockets</td>
+    <td>$physicalCores</td>
+    <td><strong>$licensableCores</strong></td>
+    <td>$ruleApplied</td>
+    <td>$assignedLicense</td>
+    <td>-</td>
+    <td>$($vmhost.ProcessorType)</td>
+    <td>$($vmhost.Version)</td>
+</tr>
+"@
+    }
+
+    $hostLicenseRows = $hostLicenseRows -join "`n"
+
+    if ([string]::IsNullOrWhiteSpace($hostLicenseRows)) {
+
+        $hostLicenseRows = @"
+<tr>
+    <td colspan='10'>No host licensing information available.</td>
+</tr>
+"@
+    }
+
 
             $safeCustomer = if ($Assessment.CustomerName) { $Assessment.CustomerName } else { 'Not informed' }
             $accent = if ($script:IsInternal) { '#f28b25' } else { '#2563eb' }
@@ -637,9 +743,6 @@ function Export-PdfFromHtml {
             if ($estimate.CheaperEstimatedModel -eq 'Equal') {
                 $financialNarrative = "Estimated costs are equivalent with the supplied unit prices. Delta (VCF - VVF): $($estimate.Currency) $([math]::Round([double]$estimate.DeltaVCFMinusVVF,2))."
             }
-
-            
-$hostLicenseRows = ''
 
 $hostLicenseRows = foreach ($vmhost in (Get-VMHost | Sort-Object Name)) {
 
@@ -698,6 +801,16 @@ $hostLicenseRows = foreach ($vmhost in (Get-VMHost | Sort-Object Name)) {
 }
 
 $hostLicenseRows = $hostLicenseRows -join "`n"
+
+    if ([string]::IsNullOrWhiteSpace($hostLicenseRows)) {
+
+        $hostLicenseRows = @"
+<tr>
+    <td colspan='10'>No host licensing information available.</td>
+</tr>
+"@
+    }
+
 
 
 $html = @"
